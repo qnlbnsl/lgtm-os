@@ -3,6 +3,7 @@
 set -e
 id live >/dev/null 2>&1 || useradd -m -G wheel,video,input -s /bin/bash live
 passwd -d live >/dev/null
+grep -q '^live:' /etc/subuid 2>/dev/null || usermod --add-subuids 100000-165535 --add-subgids 100000-165535 live
 echo 'live ALL=(ALL:ALL) NOPASSWD: ALL' > /etc/sudoers.d/00-live
 chmod 440 /etc/sudoers.d/00-live
 cat >> /etc/greetd/config.toml <<'CONF'

@@ -1,0 +1,10 @@
+[Unit]
+Description=Update apps installed from .deb, .rpm and Flatpak
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/lgtm-apps-update
+Nice=19
+IOSchedulingClass=idle
+CPUSchedulingPolicy=idle

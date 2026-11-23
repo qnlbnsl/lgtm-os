@@ -1,0 +1,8 @@
+[Unit]
+Description=Notify about a crash and offer an AI diagnosis
+
+[Service]
+Type=oneshot
+# systemd-coredump writes the file a moment before logging it; wait for the journal entry.
+ExecStartPre=/usr/bin/sleep 2
+ExecStart=/usr/bin/lgtm-crash

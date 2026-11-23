@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# lgtm-crash: tell the user when one of their programs crashed, and offer to have the
+# AI agent explain it (using the diagnose-crash skill).
+#
+# Started by the user unit lgtm-crash.path when systemd-coredump writes a new core
+# dump. No watcher process runs in between: the path unit is just an inotify watch held
+# by systemd, so this costs no RAM until something crashes.
+set -euo pipefail
+
+STATE=${XDG_STATE_HOME:-$HOME/.local/state}/lgtm/crash
+mkdir -p "$STATE"
+
+# Newest core dumps from the last 2 minutes that belong to this user.
+dumps=$(coredumpctl list --since=-120s --no-legend --json=short 2>/dev/null || echo '[]')
+[[ $dumps == "[]" || -z $dumps ]] && exit 0
+
+python3 -I - "$dumps" "$UID" <<'EOF' | while IFS=$'\t' read -r pid exe sig; do
+import json, sys
+dumps, uid = json.loads(sys.argv[1]), int(sys.argv[2])
+for d in dumps:
+    if int(d.get("uid", -1)) == uid:
+        print(f'{d.get("pid")}\t{d.get("exe", "?")}\t{d.get("sig", "?")}')
+EOF
+  name=$(basename -- "$exe")
+  # Once per program per minute, and never for programs the user muted.
+  [[ -e $STATE/mute-$name ]] && continue
+  stamp=$STATE/last-$name
+  if [[ -e $stamp ]] && (( $(date +%s) - $(stat -c %Y "$stamp") < 60 )); then continue; fi
+  touch "$stamp"
+
+  action=$(notify-send -a "LGTM OS" -u critical -i dialog-error -t 30000 -w \
+             -A ask="Ask AI why" -A mute="Don't show again" \
+             "$name crashed" "Signal $sig, PID $pid." 2>/dev/null || true)
+  case $action in
+    ask)  lgtm-agent --prompt "The program $name (executable $exe, PID $pid) crashed with signal $sig just now on this machine. Use the diagnose-crash skill to find out why. If skills aren't available, read /usr/share/lgtm/agents/skills/diagnose-crash/SKILL.md and follow it." & ;;
+    mute) touch "$STATE/mute-$name" ;;
+  esac
+done

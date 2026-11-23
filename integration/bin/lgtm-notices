@@ -1,0 +1,105 @@
+#!/usr/bin/env python3
+"""lgtm-notices: write the open source notices for everything installed.
+
+Generates /usr/share/lgtm/NOTICES.md from the pacman database: every package with its
+version, license(s), project URL and where its license text is. Run by a pacman hook
+after every install/update, so it always matches what's on the system.
+
+    lgtm-notices [--out PATH] [--root DIR]
+"""
+import argparse
+import datetime
+import os
+import re
+import subprocess
+import sys
+
+HEADER = """# Open source notices
+
+LGTM OS is built from free and open source software. This file lists every package
+installed on this system, its license, and where to find the license text and source.
+It is regenerated automatically after every package install or update.
+
+- **LGTM OS's own code** (package `lgtm-integration`) is licensed GPL-3.0-or-later.
+  Source: https://github.com/qnlbnsl/lgtm-os
+- **License texts:** each package's own files are in `/usr/share/licenses/<package>/`.
+  Common licenses (GPL, LGPL, MIT, Apache, BSD, MPL, ...) are in `/usr/share/licenses/spdx/`.
+- **Source code:** the build recipe for each Arch package is at
+  `https://gitlab.archlinux.org/archlinux/packaging/packages/<package>`, and the exact
+  source archives for released versions at `https://sources.archlinux.org/`. Upstream
+  projects are linked below. LGTM OS's own packages build from the repository above.
+- **Bundled collections:** some packages bundle other software that keeps its own license:
+  GE-Proton (`/usr/share/steam/compatibilitytools.d/*/LICENSE*` and `*/PATENTS*`),
+  Firefox, and the Electron runtime in teams-for-linux (see their license folders).
+- **Trademarks:** Windows, Microsoft Teams, macOS, Android and other names belong to their
+  owners. LGTM OS is not affiliated with or endorsed by them; it runs their apps through
+  open source compatibility layers (Wine/Proton, Waydroid, Darling).
+
+"""
+
+
+def packages(root):
+    cmd = ["pacman", "-Qi"]
+    if root:
+        cmd[1:1] = ["--root", root]
+    out = subprocess.run(cmd, capture_output=True, text=True, check=True,
+                         env={**os.environ, "LC_ALL": "C"}).stdout
+    pkg, key = {}, None
+    for line in out.splitlines() + [""]:
+        if not line.strip():
+            if pkg:
+                yield pkg
+            pkg, key = {}, None
+            continue
+        if line[:1].isspace() and key:          # wrapped continuation line
+            pkg[key] += "  " + line.strip()
+            continue
+        k, _, v = line.partition(":")
+        key = k.strip()
+        pkg[key] = v.strip()
+
+
+def cell(s):
+    return s.replace("|", "\\|")
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--out", default="/usr/share/lgtm/NOTICES.md")
+    ap.add_argument("--root", default="")
+    a = ap.parse_args()
+
+    rows, by_license = [], {}
+    lic_root = os.path.join(a.root or "/", "usr/share/licenses")
+    for p in packages(a.root):
+        name, lic = p.get("Name", "?"), p.get("Licenses", "None") or "None"
+        url = p.get("URL", "None")
+        own = os.path.isdir(os.path.join(lic_root, name))
+        rows.append((name, p.get("Version", "?"), "; ".join(re.split(r"\s{2,}", lic)),
+                     url if url != "None" else "",
+                     f"`/usr/share/licenses/{name}/`" if own else "see SPDX folder"))
+        # pacman separates licenses with 2+ spaces; one license can be an SPDX
+        # expression with single spaces ("GPL-2.0-only WITH Linux-syscall-note").
+        for l in re.split(r"\s{2,}", lic):
+            by_license[l] = by_license.get(l, 0) + 1
+
+    body = [HEADER,
+            f"_{len(rows)} packages, generated {datetime.date.today().isoformat()}._\n",
+            "## Licenses used\n",
+            ", ".join(f"{l} ({n})" for l, n in sorted(by_license.items(), key=lambda x: (-x[1], x[0]))),
+            "\n\n## Packages\n",
+            "| Package | Version | License | Project | License text |",
+            "|---|---|---|---|---|"]
+    body += [f"| {cell(n)} | {cell(v)} | {cell(l)} | {cell(u)} | {t} |" for n, v, l, u, t in sorted(rows)]
+
+    out = a.out if not a.root else os.path.join(a.root, a.out.lstrip("/"))
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    tmp = out + ".tmp"
+    with open(tmp, "w") as f:
+        f.write("\n".join(body) + "\n")
+    os.replace(tmp, out)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

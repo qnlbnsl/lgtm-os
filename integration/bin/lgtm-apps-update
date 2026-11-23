@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# lgtm-apps-update: update apps installed from .deb/.rpm/Flatpak, weekly.
+# Only touches containers that exist; quiet when there's nothing to do.
+set -uo pipefail
+for box in lgtm-ubuntu lgtm-fedora; do
+  podman container exists "$box" 2>/dev/null || continue
+  case $box in
+    lgtm-ubuntu) distrobox enter --no-tty "$box" -- sh -c 'sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq' ;;
+    lgtm-fedora) distrobox enter --no-tty "$box" -- sudo dnf upgrade -y -q ;;
+  esac
+  # Stop the container again: no idle RAM.
+  podman stop -t 5 "$box" >/dev/null 2>&1 || true
+done
+command -v flatpak >/dev/null && flatpak update --user -y --noninteractive >/dev/null 2>&1 || true

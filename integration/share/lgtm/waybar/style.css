@@ -1,4 +1,5 @@
-/* LGTM OS frosted glass. In glass mode Wayfire blurs what's behind these surfaces. */
+/* LGTM OS frosted glass. In glass mode Wayfire blurs what's behind these surfaces.
+   Colours (@fg, @bar_bg, ...) come from the theme: lgtm-session writes them to theme.css. */
 * {
   font-family: "Inter", "Noto Sans", sans-serif;
   font-size: 13px;
@@ -6,12 +7,12 @@
   min-height: 0;
 }
 
-window#waybar { background: transparent; color: #f5f5f7; }
+window#waybar { background: transparent; color: @fg; }
 
 /* Top bar: thin frosted strip, like the Mac menu bar. */
 window#waybar.top {
-  background: rgba(28, 28, 34, 0.30);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.10);
+  background: @bar_bg;
+  border-bottom: 1px solid @hairline;
 }
 window#waybar.top .modules-left,
 window#waybar.top .modules-right { padding: 0 12px; }
@@ -19,12 +20,12 @@ window#waybar.top .modules-right { padding: 0 12px; }
 #taskbar.title button { padding: 0; background: none; font-weight: 600; }
 #taskbar.title button:not(.active) { font-size: 0; opacity: 0; padding: 0; margin: 0; min-width: 0; }
 #clock, #network, #battery, #tray { font-weight: 500; }
-#battery.low { color: #ff6b6b; }
+#battery.low { color: @red; }
 
 /* Dock: rounded frosted pill. */
 window#waybar.dock .modules-center {
-  background: rgba(255, 255, 255, 0.16);
-  border: 1px solid rgba(255, 255, 255, 0.28);
+  background: @dock_bg;
+  border: 1px solid @border;
   border-radius: 18px;
   padding: 4px 8px;
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
@@ -42,7 +43,7 @@ window#waybar.dock #image:hover { margin-top: -6px; }
 #taskbar.dock button.active { border-bottom: 3px solid rgba(255, 255, 255, 0.85); }
 
 tooltip {
-  background: rgba(30, 30, 36, 0.92);
-  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: @tooltip_bg;
+  border: 1px solid @border;
   border-radius: 8px;
 }

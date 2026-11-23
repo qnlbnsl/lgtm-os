@@ -1,0 +1,10 @@
+/* Frosted panel over the wallpaper, matching the desktop. */
+window { font-family: "Inter", sans-serif; }
+frame.background, box.background, .background > box {
+  background-color: rgba(30, 30, 30, 0.72);
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+}
+entry { border-radius: 10px; background-color: rgba(255, 255, 255, 0.10); }
+button.suggested-action { border-radius: 10px; }

@@ -1,0 +1,11 @@
+[Unit]
+Description=Weekly app updates
+
+[Timer]
+OnCalendar=weekly
+Persistent=true
+OnStartupSec=15min
+RandomizedDelaySec=1h
+
+[Install]
+WantedBy=timers.target

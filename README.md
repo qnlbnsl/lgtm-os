@@ -29,7 +29,52 @@ Both modes have a Mac-style top bar and a floating frosted dock, with window but
 Force a mode in `~/.config/lgtm/session.conf` with `MODE=glass` or `MODE=lite`, or use the
 logo menu (top-left).
 
+## Install
+`lgtm-install` (on the live desktop: **Install LGTM OS**) asks for a disk, your name and
+password, time zone, and two choices:
+- **Keyboard style:** macOS (Super is ⌘; ⌘C/⌘V/⌘Q/⌘Space…, window buttons on the left) or
+  Windows (tap Super for apps, Win+E/L/D, Win+arrows snap, buttons on the right).
+  Switch later from the logo menu or with `sudo lgtm-keys mac|windows`.
+- **Disk encryption** (recommended): like Omarchy, the password typed at the boot splash
+  is the only one, and the desktop opens by itself. Without encryption you choose
+  between automatic login and a graphical login screen (ReGreet), which exits after login.
+
+- **Theme:** Aurora (blue glass) or macOS Graphite (neutral grays, WhiteSur icons, macOS
+  cursor). Switch any time: logo menu → Theme…, or `lgtm-theme macos-graphite`.
+- **What it's for** (any of): Gaming, Windows VM, Developer & AI agents. These install on
+  first login, when there's internet; add more later with `lgtm-setup`.
+
+Boot is quiet: GRUB hidden, Plymouth splash with the LGTM logo.
+
+## One OS, set up for what you do
+| Profile | What you get |
+|---|---|
+| `gaming` | Steam, Heroic (Epic/GOG), Lutris, GameMode, MangoHud, Gamescope, Vulkan drivers for your GPU. Games use the bundled GE-Proton. |
+| `windows-vm` | Windows 11 with your second GPU passed through, shown fullscreen via Looking Glass. `lgtm-vm create` sizes it for your PC: pinned cores, hugepages, NVMe or virtual disk, shared folders. |
+| `dev` | git, GitHub CLI, Node, uv, Go, Rust, ripgrep/fd/fzf, Docker-compatible podman. AI agents install from the dock on first use. |
+
+Profiles and themes are plain folders (`/usr/share/lgtm/profiles`, `/usr/share/lgtm/themes`)
+with a `packages` list; AUR entries are built on the machine when needed.
+
 ## Running apps
+Double-click any app package and `lgtm-open` handles it:
+
+| Package | Built for | How LGTM OS runs it |
+|---|---|---|
+| `.exe` `.msi` `.bat` `.lnk` | Windows | Wine/Proton (below) |
+| `.apk` | Android | Waydroid (below) |
+| `.deb` | Debian/Ubuntu | Rootless Ubuntu 24.04 container (distrobox + podman); apps exported to the menu, CLIs to `~/.local/bin` |
+| `.rpm` | Fedora/RHEL/SUSE | Rootless Fedora container, same way |
+| `.AppImage` | Any Linux | Kept in `~/Applications`, added to the menu with its icon |
+| `.flatpak` `.flatpakref` | Flatpak | `flatpak --user` with Flathub |
+| `.pkg.tar.zst` | Arch | pacman |
+| `.dmg` `.app` | macOS | Darling (preview) |
+
+Containers use podman with no background service, so they cost no RAM until an app runs.
+Apps installed from `.deb`, `.rpm` and Flatpak update weekly (`lgtm-apps-update`).
+`.snap` isn't supported (snapd needs a system daemon); most snaps are also on Flathub.
+
+### Details per platform
 | Type | How | Notes |
 |---|---|---|
 | Windows `.exe/.msi/.bat/.lnk` | `lgtm-exe` (double-click, or `./setup.exe` via binfmt) | umu-launcher with bundled GE-Proton; falls back to plain Wine when offline. Start Menu shortcuts become app menu entries automatically (`lgtm-menu-sync`). |
@@ -60,6 +105,7 @@ tools/vm.sh disk 128      # boot the installed system with 128 MB; run lgtm-mem
 - `tools/vm.sh`: QEMU test runner
 
 ## Licenses
-LGTM OS's own code is GPL-3.0-or-later. Bundled components keep their own licenses
-(Wine LGPL-2.1+, Proton BSD-3-Clause plus bundled parts, umu GPL-3.0, Waydroid GPL-3.0,
-Darling GPL-3.0, labwc GPL-2.0, Wayfire MIT, waybar MIT, Linux GPL-2.0, and so on).
+LGTM OS's own code is GPL-3.0-or-later ([LICENSE](LICENSE)). Bundled components keep their
+own licenses: see [NOTICE.md](NOTICE.md). Every image also carries a complete, generated list
+of all installed packages and licenses at `/usr/share/lgtm/NOTICES.md` (logo menu → About &
+open source licenses).

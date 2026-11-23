@@ -1,0 +1,23 @@
+    <!-- macOS style. Super is ⌘; keyd turns ⌘C/⌘V/... into app shortcuts. -->
+    <keybind key="W-space"><action name="Execute" command="fuzzel" /></keybind>
+    <keybind key="W-Return"><action name="Execute" command="foot" /></keybind>
+    <keybind key="W-A-space"><action name="Execute" command="thunar" /></keybind>
+    <keybind key="W-S-a"><action name="Execute" command="lgtm-agent" /></keybind>
+    <keybind key="W-q"><action name="Close" /></keybind>
+    <keybind key="W-m"><action name="Iconify" /></keybind>
+    <keybind key="W-h"><action name="Iconify" /></keybind>
+    <keybind key="C-W-f"><action name="ToggleFullscreen" /></keybind>
+    <keybind key="C-W-Return"><action name="ToggleMaximize" /></keybind>
+    <keybind key="W-Tab"><action name="NextWindow" /></keybind>
+    <keybind key="C-W-Left"><action name="GoToDesktop" to="left" wrap="no" /></keybind>
+    <keybind key="C-W-Right"><action name="GoToDesktop" to="right" wrap="no" /></keybind>
+    <keybind key="W-S-3"><action name="Execute" command="lgtm-screenshot full" /></keybind>
+    <keybind key="W-S-4"><action name="Execute" command="lgtm-screenshot region" /></keybind>
+    <keybind key="W-S-5"><action name="Execute" command="lgtm-screenshot region" /></keybind>
+    <keybind key="C-W-q"><action name="Execute" command="lgtm-lock" /></keybind>
+    <keybind key="W-A-Escape"><action name="Execute" command="lgtm-power" /></keybind>
+    <keybind key="XF86AudioRaiseVolume"><action name="Execute" command="wpctl set-volume -l 1 @DEFAULT_AUDIO_SINK@ 5%+" /></keybind>
+    <keybind key="XF86AudioLowerVolume"><action name="Execute" command="wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-" /></keybind>
+    <keybind key="XF86AudioMute"><action name="Execute" command="wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle" /></keybind>
+    <keybind key="XF86MonBrightnessUp"><action name="Execute" command="brightnessctl set +5%" /></keybind>
+    <keybind key="XF86MonBrightnessDown"><action name="Execute" command="brightnessctl set 5%-" /></keybind>

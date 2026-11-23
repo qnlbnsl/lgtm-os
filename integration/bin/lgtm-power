@@ -6,15 +6,26 @@ cur=${LGTM_MODE:-lite}
 other=$([[ $cur == glass ]] && echo lite || echo glass)
 
 choice=$(printf '%s\n' \
+  "Choose AI agent" \
+  "Theme…" \
+  "Set up: gaming, Windows VM, dev…" \
+  "Keyboard style: switch to $([[ $(lgtm-keys) == mac ]] && echo Windows || echo macOS)" \
   "Stop Android (free memory)" \
   "Switch to ${other^} mode (next login)" \
+  "About & open source licenses" \
   "Log out" "Restart" "Shut down" \
-  | fuzzel --dmenu --prompt "LGTM OS  " --lines 5) || exit 0
+  | fuzzel --dmenu --prompt "LGTM OS  " --lines 10) || exit 0
 
 case $choice in
+  "Choose AI agent") lgtm-agent --pick ;;
+  Theme*) lgtm-theme --pick ;;
+  Set\ up*) lgtm-setup --pick ;;
+  Keyboard\ style*) new=$([[ $(lgtm-keys) == mac ]] && echo windows || echo mac)
+                   foot --title="Keyboard style" -e sh -c "sudo lgtm-keys $new && lgtm-session --apply; echo 'New shortcuts work in new windows now; log out and in to apply them everywhere.'; read -rp 'Press Enter to close' _" ;;
   Stop\ Android*) lgtm-android stop ;;
   Switch*) mkdir -p "$(dirname "$CONF")"; echo "MODE=$other" > "$CONF"
            notify-send -a "LGTM OS" "Mode set to ${other^}" "Log out and back in to apply." ;;
+  About*) foot --title="LGTM OS notices" -e less /usr/share/lgtm/NOTICES.md ;;
   "Log out")  loginctl terminate-session "${XDG_SESSION_ID:-self}" ;;
   "Restart")  systemctl reboot ;;
   "Shut down") systemctl poweroff ;;

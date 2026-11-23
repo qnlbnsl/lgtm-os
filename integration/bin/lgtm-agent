@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# lgtm-agent: open your AI coding agent in a terminal, ready to work on this machine.
+#
+#   lgtm-agent                 launch the default agent (asks once if none is set)
+#   lgtm-agent --pick          choose the default agent
+#   lgtm-agent --prompt TEXT   launch with a starting prompt
+#   lgtm-agent --link-skills   (re)link LGTM OS skills into every agent's skills folder
+#
+# Supported: claude (Claude Code), codex (OpenAI Codex), opencode, gemini (Gemini CLI).
+# Nothing runs in the background: the agent starts when you open it and exits with it.
+set -euo pipefail
+
+CONF=${XDG_CONFIG_HOME:-$HOME/.config}/lgtm/agent
+SKILLS=/usr/share/lgtm/agents/skills
+AGENTS=(claude codex opencode gemini)
+
+notify() { command -v notify-send >/dev/null && notify-send -a "LGTM OS" -i utilities-terminal "$@" 2>/dev/null || true; }
+
+label() {
+  case $1 in
+    claude) echo "Claude Code (Anthropic)" ;; codex) echo "Codex (OpenAI)" ;;
+    opencode) echo "opencode (any model)" ;; gemini) echo "Gemini CLI (Google)" ;;
+  esac
+}
+
+bin_of() { case $1 in claude) echo claude ;; codex) echo codex ;; opencode) echo opencode ;; gemini) echo gemini ;; esac; }
+
+# Shown to the user in a terminal before running: official install methods only.
+install_cmd() {
+  case $1 in
+    claude)   echo 'curl -fsSL https://claude.ai/install.sh | bash' ;;
+    codex)    echo 'sudo pacman -S --needed nodejs npm && npm install -g --prefix ~/.local @openai/codex' ;;
+    opencode) echo 'sudo pacman -S --needed opencode' ;;
+    gemini)   echo 'sudo pacman -S --needed nodejs npm && npm install -g --prefix ~/.local @google/gemini-cli' ;;
+  esac
+}
+
+# Command line for the agent, with an optional starting prompt.
+run_cmd() {
+  local a=$1 p=${2:-}
+  case $a in
+    claude|codex) [[ -n $p ]] && printf '%s %q' "$a" "$p" || echo "$a" ;;
+    opencode)     [[ -n $p ]] && printf 'opencode --prompt %q' "$p" || echo opencode ;;
+    gemini)       [[ -n $p ]] && printf 'gemini -i %q' "$p" || echo gemini ;;
+  esac
+}
+
+# Skills: one shared folder (~/.agents/skills, read by opencode and others) plus each
+# agent's own folder, but only for agents that are installed (their home exists).
+link_skills() {
+  [[ -d $SKILLS ]] || return 0
+  local dirs=("$HOME/.agents/skills") d s
+  [[ -d $HOME/.claude ]] && dirs+=("$HOME/.claude/skills")
+  [[ -d $HOME/.codex ]]  && dirs+=("$HOME/.codex/skills")
+  [[ -d $HOME/.gemini ]] && dirs+=("$HOME/.gemini/skills")
+  for d in "${dirs[@]}"; do
+    mkdir -p "$d"
+    for s in "$SKILLS"/*/; do
+      s=${s%/}
+      # Don't replace a user's own skill of the same name.
+      if [[ -e $d/${s##*/} && ! -L $d/${s##*/} ]]; then continue; fi
+      ln -sfn "$s" "$d/${s##*/}"
+    done
+  done
+}
+
+pick() {
+  local lines=() a choice
+  for a in "${AGENTS[@]}"; do
+    if command -v "$(bin_of "$a")" >/dev/null; then lines+=("$(label "$a")"); else lines+=("$(label "$a")  (installs on first use)"); fi
+  done
+  choice=$(printf '%s\n' "${lines[@]}" | fuzzel --dmenu --prompt "AI agent  " --lines ${#lines[@]}) || exit 0
+  for a in "${AGENTS[@]}"; do
+    [[ $choice == "$(label "$a")"* ]] && { mkdir -p "$(dirname "$CONF")"; echo "$a" > "$CONF"; echo "$a"; return; }
+  done
+  exit 1
+}
+
+prompt=""
+case ${1:-} in
+  --pick) shift; agent=$(pick) || true; [[ -n $agent ]] || exit 0 ;;
+  --prompt) prompt=${2:-}; shift 2 || true ;;
+  --link-skills) link_skills; exit 0 ;;
+  -h|--help) sed -n '2,11p' "$0"; exit 0 ;;
+esac
+agent=${agent:-$( [[ -r $CONF ]] && head -n1 "$CONF" || true )}
+if [[ -z $agent ]]; then agent=$(pick) || true; [[ -n $agent ]] || exit 0; fi
+case " ${AGENTS[*]} " in *" $agent "*) ;; *) notify "Unknown agent '$agent'" "Choose one with: lgtm-agent --pick"; exit 1 ;; esac
+
+# Start in ~/Work if it exists (where projects usually live), else home.
+dir=$HOME; [[ -d $HOME/Work ]] && dir=$HOME/Work
+
+cmd=$(run_cmd "$agent" "$prompt")
+if ! command -v "$(bin_of "$agent")" >/dev/null; then
+  # First use: show the official install command, run it, then start the agent.
+  inst=$(install_cmd "$agent")
+  cmd="echo 'Installing $(label "$agent"):'; echo '  $inst'; echo; ($inst) && export PATH=\$HOME/.local/bin:\$PATH && lgtm-agent --link-skills && $cmd; echo; read -rp 'Press Enter to close' _"
+else
+  link_skills
+fi
+
+exec foot --app-id=lgtm.agent --title="$(label "$agent")" -D "$dir" -e bash -lc "$cmd"

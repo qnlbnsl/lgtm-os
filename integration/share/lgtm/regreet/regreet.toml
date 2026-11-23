@@ -1,0 +1,18 @@
+# LGTM OS login screen (ReGreet in cage). Only shown when not logging in automatically;
+# it exits after login, so it uses no memory afterwards.
+[background]
+path = "/etc/lgtm/wallpaper.png"   # the default theme's wallpaper (lgtm-theme --default)
+fit = "Cover"
+
+[GTK]
+application_prefer_dark_theme = true
+font_name = "Inter 12"
+icon_theme_name = "Papirus-Dark"
+theme_name = "Adwaita"
+
+[commands]
+reboot = ["systemctl", "reboot"]
+poweroff = ["systemctl", "poweroff"]
+
+[appearance]
+greeting_msg = "Welcome to LGTM OS"

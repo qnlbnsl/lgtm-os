@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# lgtm-lock: lock the screen (swaylock, graphite style). Exits when unlocked; no idle cost.
+exec swaylock -f -F -c 1e1e1e --inside-color 2a2a2acc --ring-color 6b6b74 \
+  --key-hl-color 7fd3ff --line-color 00000000 --text-color f5f5f7 \
+  --indicator-radius 60 --font Inter "$@"

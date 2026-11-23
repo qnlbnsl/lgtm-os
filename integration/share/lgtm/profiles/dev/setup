@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# `docker` commands talk to rootless podman (podman-docker); silence its notice.
+touch /etc/containers/nodocker
+# A stable Rust toolchain for the user.
+runuser -u "$LGTM_USER" -- rustup default stable >/dev/null 2>&1 || true
+install -d -o "$LGTM_USER" -g "$LGTM_USER" "/home/$LGTM_USER/Work"
+echo "Developer tools ready. Projects go in ~/Work (the AI agent starts there)."

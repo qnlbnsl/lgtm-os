@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Windows VM profile, run as root after its packages. $LGTM_USER = the desktop user.
+set -euo pipefail
+F=/usr/share/lgtm/profiles/windows-vm/files
+usermod -aG libvirt,kvm "$LGTM_USER"
+
+# Looking Glass shared memory device.
+[[ -e /etc/modprobe.d/kvmfr.conf ]] || install -Dm644 "$F/kvmfr.conf" /etc/modprobe.d/kvmfr.conf
+install -Dm644 "$F/kvmfr-load.conf" /etc/modules-load.d/kvmfr.conf
+install -Dm644 "$F/99-kvmfr.rules" /etc/udev/rules.d/99-kvmfr.rules
+udevadm control --reload
+modprobe kvmfr 2>/dev/null && udevadm trigger --subsystem-match=kvmfr || reboot_needed=1
+
+# QEMU may open /dev/kvmfr0 (cgroup device ACL).
+QC=/etc/libvirt/qemu.conf
+ACL='cgroup_device_acl = [ "/dev/null", "/dev/full", "/dev/zero", "/dev/random", "/dev/urandom", "/dev/ptmx", "/dev/kvm", "/dev/userfaultfd", "/dev/kvmfr0" ]'
+grep -qxF "$ACL" "$QC" || { sed -i '/^cgroup_device_acl/d' "$QC"; echo "$ACL" >> "$QC"; }
+
+# Hugepages + CPU isolation while an lgtm-vm VM runs.
+install -Dm755 "$F/lgtm-tuning" /etc/libvirt/hooks/qemu.d/lgtm-tuning
+
+systemctl enable --now libvirtd.socket virtlogd.socket
+systemctl restart libvirtd
+virsh -c qemu:///system net-autostart default >/dev/null 2>&1 || true
+virsh -c qemu:///system net-start default >/dev/null 2>&1 || true
+
+# GPU passthrough needs the IOMMU on, in passthrough mode for host devices.
+if grep -q GenuineIntel /proc/cpuinfo; then iommu="intel_iommu=on iommu=pt"; else iommu="amd_iommu=on iommu=pt"; fi
+if [[ -f /etc/default/grub ]] && ! grep -q 'iommu=pt' /etc/default/grub; then
+  sed -i -E "s/^(GRUB_CMDLINE_LINUX_DEFAULT=\"[^\"]*)\"/\1 $iommu\"/" /etc/default/grub
+  grub-mkconfig -o /boot/grub/grub.cfg >/dev/null 2>&1
+  reboot_needed=1
+fi
+
+echo
+echo "Windows VM tools ready."
+[[ ${reboot_needed:-0} == 1 ]] && echo "Restart the computer first (IOMMU / Looking Glass module), then:"
+echo "  1. Put the Windows 11 ISO in ~/Downloads (microsoft.com/software-download/windows11)"
+echo "  2. Run: lgtm-vm create      (picks the GPU, CPU cores and memory for you)"

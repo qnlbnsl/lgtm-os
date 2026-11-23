@@ -5,17 +5,32 @@ pkgrel=1
 pkgdesc="LGTM OS desktop integration: run .exe/.apk like native apps, Mac-style glass desktop"
 arch=('any')
 license=('GPL-3.0-or-later')
-depends=(bash python wine umu-launcher icoutils libnotify waydroid polkit
+depends=(bash python file git pciutils wl-clipboard grim slurp swaylock keyd plymouth greetd-regreet cage cryptsetup distrobox podman fuse2 flatpak wine umu-launcher icoutils libnotify waydroid polkit
          labwc wayfire waybar swaybg fuzzel foot thunar greetd greetd-tuigreet
          earlyoom zram-generator papirus-icon-theme inter-font wireplumber brightnessctl
          arch-install-scripts gptfdisk dosfstools e2fsprogs squashfs-tools)
 optdepends=('darling-bin: Mac programs (preview)'
+            'whitesur-icon-theme: macOS Graphite theme icons'
+            'apple_cursor: macOS Graphite theme cursor'
             'teams-for-linux-bin: Microsoft Teams')
 install=lgtm-integration.install
 _src=../../../integration
 
+makedepends=(librsvg)
+
 build() {
-  python "$startdir/$_src/tools/make-wallpaper.py" "$srcdir/wallpaper.png" 1920 1080
+  # One generated wallpaper per theme (theme.conf: WALLPAPER_STYLE).
+  local t
+  for t in "$startdir/$_src"/share/lgtm/themes/*/; do
+    t=${t%/}
+    python "$startdir/$_src/tools/make-wallpaper.py" "$srcdir/wallpaper-${t##*/}.png" 1920 1080 \
+      "$(. "$t/theme.conf"; echo "$WALLPAPER_STYLE")"
+  done
+  # Boot splash images from SVG.
+  local p="$startdir/$_src/share/plymouth/lgtm"
+  rsvg-convert -w 96 -h 96 "$startdir/$_src/share/lgtm/lgtm-logo.svg" -o "$srcdir/logo.png"
+  rsvg-convert "$p/dot.svg" -o "$srcdir/dot.png"
+  rsvg-convert "$p/entry.svg" -o "$srcdir/entry.png"
 }
 
 package() {
@@ -23,8 +38,14 @@ package() {
   install -Dm755 -t "$pkgdir/usr/bin" "$s"/bin/*
   install -d "$pkgdir/usr/share"
   cp -r "$s/share/lgtm" "$pkgdir/usr/share/lgtm"
-  install -Dm644 "$srcdir/wallpaper.png" "$pkgdir/usr/share/lgtm/wallpaper.png"
-  install -Dm644 -t "$pkgdir/usr/share/applications" "$s"/share/applications/lgtm-{exe,apk,android,install}.desktop
+  local w
+  for w in "$srcdir"/wallpaper-*.png; do
+    w=${w##*/wallpaper-}; install -Dm644 "$srcdir/wallpaper-$w" "$pkgdir/usr/share/lgtm/themes/${w%.png}/wallpaper.png"
+  done
+  ln -s themes/aurora/wallpaper.png "$pkgdir/usr/share/lgtm/wallpaper.png"
+  local t="$pkgdir/usr/share/plymouth/themes/lgtm"
+  install -Dm644 -t "$t" "$s"/share/plymouth/lgtm/lgtm.{plymouth,script} "$srcdir"/{logo,dot,entry}.png
+  install -Dm644 -t "$pkgdir/usr/share/applications" "$s"/share/applications/lgtm-{exe,apk,android,install,open,windows,setup,theme}.desktop
   install -Dm644 "$s/share/applications/lgtm-session.desktop" "$pkgdir/usr/share/wayland-sessions/lgtm.desktop"
   install -Dm644 -t "$pkgdir/usr/lib/binfmt.d" "$s"/binfmt.d/*.conf
   install -Dm644 -t "$pkgdir/usr/lib/sysctl.d" "$s"/sysctl.d/*.conf
@@ -36,9 +57,15 @@ package() {
   # Enabled for every user: weekly GE-Proton update.
   install -d "$pkgdir/usr/lib/systemd/user/timers.target.wants"
   ln -s ../lgtm-proton-update.timer "$pkgdir/usr/lib/systemd/user/timers.target.wants/lgtm-proton-update.timer"
+  ln -s ../lgtm-apps-update.timer "$pkgdir/usr/lib/systemd/user/timers.target.wants/lgtm-apps-update.timer"
+  install -d "$pkgdir/usr/lib/systemd/user/default.target.wants"
+  ln -s ../lgtm-crash.path "$pkgdir/usr/lib/systemd/user/default.target.wants/lgtm-crash.path"
+  # Agent skills (linked into each agent's skills folder by lgtm-agent / lgtm-session).
+  install -d "$pkgdir/usr/share/lgtm/agents"
+  cp -r "$s/agents/skills" "$pkgdir/usr/share/lgtm/agents/skills"
   install -Dm644 -t "$pkgdir/usr/share/polkit-1/rules.d" "$s"/polkit/*.rules
-  install -Dm644 -t "$pkgdir/etc/xdg" "$s/xdg/mimeapps.list"
-  install -Dm644 -t "$pkgdir/etc/xdg/fuzzel" "$s/xdg/fuzzel/fuzzel.ini"
-  install -Dm644 -t "$pkgdir/etc/xdg/foot" "$s/xdg/foot/foot.ini"
-  install -Dm644 -t "$pkgdir/etc/gtk-3.0" "$s/xdg/gtk-3.0/settings.ini"
+  # Default app settings live in their own XDG config dir, which lgtm-session puts
+  # first in XDG_CONFIG_DIRS. Never writes into /etc/xdg (owned by foot, fuzzel, ...).
+  install -d "$pkgdir/usr/share/lgtm"
+  cp -r "$s/xdg" "$pkgdir/usr/share/lgtm/xdg"
 }

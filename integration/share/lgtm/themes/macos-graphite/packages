@@ -1,0 +1,4 @@
+# Packages this theme needs. lgtm-theme installs any that are missing (from the
+# official repos or LGTM OS's own [lgtm] repo, which ships these prebuilt from the AUR).
+whitesur-icon-theme
+apple_cursor

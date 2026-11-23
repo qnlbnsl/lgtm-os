@@ -1,0 +1,10 @@
+# Gaming. Windows games run on the same GE-Proton LGTM OS already ships
+# (Steam, Heroic and Lutris all find it).
+steam
+gamemode
+lib32-gamemode
+mangohud
+lib32-mangohud
+gamescope
+lutris
+aur:heroic-games-launcher-bin

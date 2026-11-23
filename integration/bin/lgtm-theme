@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# lgtm-theme: show or change the LGTM OS theme.
+#
+#   lgtm-theme             list themes (* = yours)
+#   lgtm-theme NAME        switch to NAME now (installs its icons/cursor first if needed)
+#   lgtm-theme --pick      choose from a menu
+#   lgtm-theme --default NAME   (root) set the system default, used by new users and
+#                               the login screen
+#
+# Themes live in /usr/share/lgtm/themes/<name>/ and ~/.config/lgtm/themes/<name>/ (yours;
+# same name wins): theme.conf (colours, icons, cursor), wallpaper.png, and an optional
+# `packages` list (see lgtm-pkg) of what it needs.
+set -euo pipefail
+shopt -s nullglob
+
+THEMES=${LGTM_SHARE:-/usr/share/lgtm}/themes
+CONF=${XDG_CONFIG_HOME:-$HOME/.config}/lgtm/session.conf
+MINE=${XDG_CONFIG_HOME:-$HOME/.config}/lgtm/themes
+
+die() { echo "lgtm-theme: $*" >&2; exit 1; }
+dir() { if [[ -r $MINE/$1/theme.conf ]]; then echo "$MINE/$1"; else echo "$THEMES/$1"; fi; }
+label() { (. "$(dir "$1")/theme.conf"; echo "$LABEL"); }
+current() {
+  local t; t=$(cat /etc/lgtm/theme 2>/dev/null || echo aurora)
+  [[ -r $CONF ]] && t=$(. "$CONF" 2>/dev/null; echo "${THEME:-$t}")
+  echo "$t"
+}
+names() { local d; for d in "$THEMES"/*/theme.conf "$MINE"/*/theme.conf; do d=${d%/theme.conf}; echo "${d##*/}"; done | sort -u; }
+
+set_default() {
+  [[ $EUID -eq 0 ]] || die "--default needs root"
+  [[ -r $THEMES/$1/theme.conf ]] || die "no theme '$1'"
+  mkdir -p /etc/lgtm; echo "$1" > /etc/lgtm/theme
+  # The login screen shows this wallpaper.
+  ln -sfn "$THEMES/$1/wallpaper.png" /etc/lgtm/wallpaper.png
+  echo "default theme: $1"
+}
+
+use() {
+  local t=$1
+  local d; d=$(dir "$t")
+  [[ -r $d/theme.conf ]] || die "no theme '$t' (see: lgtm-theme)"
+  if [[ -r $d/packages ]] && ! lgtm-pkg --check "$d/packages" >/dev/null; then
+    if [[ -t 0 ]]; then lgtm-pkg "$d/packages"
+    else
+      # Started from the menu: install in a terminal, where the password can be typed.
+      exec foot --app-id=lgtm.setup --title="Theme: $(label "$t")" -e bash -c \
+        "lgtm-pkg '$d/packages' && lgtm-theme '$t'; echo; read -rp 'Press Enter to close' _"
+    fi
+  fi
+  mkdir -p "$(dirname "$CONF")"; touch "$CONF"
+  if grep -q '^THEME=' "$CONF"; then sed -i "s/^THEME=.*/THEME=$t/" "$CONF"; else echo "THEME=$t" >> "$CONF"; fi
+  # Reload the running desktop if there is one.
+  [[ -n ${WAYLAND_DISPLAY:-} ]] && lgtm-session --apply || true
+  command -v notify-send >/dev/null && notify-send -a "LGTM OS" "Theme: $(label "$t")" \
+    "Open windows pick up icons and cursor when reopened." 2>/dev/null || true
+  echo "theme: $t"
+}
+
+case ${1:-} in
+  "") cur=$(current); for n in $(names); do printf '%s %-16s %s\n' "$([[ $n == "$cur" ]] && echo '*' || echo ' ')" "$n" "$(label "$n")"; done ;;
+  --pick)
+    cur=$(current); lines=()
+    for n in $(names); do lines+=("$(label "$n")$([[ $n == "$cur" ]] && echo '  ✓')"); done
+    choice=$(printf '%s\n' "${lines[@]}" | fuzzel --dmenu --prompt "Theme  " --lines ${#lines[@]}) || exit 0
+    for n in $(names); do [[ ${choice%  ✓} == "$(label "$n")" ]] && use "$n"; done ;;
+  --default) set_default "${2:?theme name}" ;;
+  -h|--help) sed -n '2,13p' "$0" ;;
+  *) use "$1" ;;
+esac

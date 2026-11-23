@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 # lgtm-install: install LGTM OS from the live ISO onto a disk.
 #
-# Copies the live system image straight to disk (offline, no downloads), then
-# configures the bootloader, user and login. Erases the whole selected disk.
+# Copies the live system image straight to disk (offline, no downloads), then sets up
+# the user, keyboard style, optional full-disk encryption, boot splash, bootloader and
+# login. Erases the whole selected disk.
+#
+# Login works like Omarchy's: with encryption, the password typed at the boot splash
+# is the only one; the desktop then opens automatically.
 set -euo pipefail
 
 [[ $EUID -eq 0 ]] || exec sudo -- "$0" "$@"
@@ -11,9 +15,11 @@ BOOTMNT=/run/archiso/bootmnt
 SFS=$(ls "$BOOTMNT"/arch/x86_64/airootfs.sfs 2>/dev/null || true)
 KERNEL=$BOOTMNT/arch/boot/x86_64/vmlinuz-linux-zen
 MNT=/mnt/lgtm
+MAPPER=lgtmroot
 
 die()  { echo "error: $*" >&2; exit 1; }
 ask()  { local p=$1 d=${2:-}; read -rp "$p${d:+ [$d]}: " REPLY; REPLY=${REPLY:-$d}; }
+yes()  { [[ ${1,,} == y* ]]; }
 part() { [[ $1 =~ [0-9]$ ]] && echo "${1}p$2" || echo "${1}$2"; }
 
 [[ -n $SFS && -r $SFS ]] || die "run this from the LGTM OS live ISO (no system image found)"
@@ -34,9 +40,11 @@ for i in "${!disks[@]}"; do
   printf '  %d) %s\n' $((i+1)) "$(lsblk -dno NAME,SIZE,MODEL "${disks[$i]}" | sed 's/  */ /g')"
 done
 ask "Install to disk number" 1
+[[ $REPLY =~ ^[0-9]+$ ]] || die "invalid choice"
 disk=${disks[$((REPLY-1))]:-} ; [[ -b $disk ]] || die "invalid choice"
 
-# --- user ---------------------------------------------------------------------
+# --- you ----------------------------------------------------------------------
+echo
 ask "Your name for login (lowercase)" user
 username=$REPLY
 [[ $username =~ ^[a-z_][a-z0-9_-]*$ ]] || die "invalid username"
@@ -47,41 +55,112 @@ while :; do
   echo "Passwords are empty or don't match, try again."
 done
 ask "Computer name" lgtm; hostname=$REPLY
+[[ $hostname =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,62}$ ]] || die "invalid computer name"
 ask "Time zone (e.g. Europe/Berlin)" UTC; tz=$REPLY
-[[ -e /usr/share/zoneinfo/$tz ]] || die "unknown time zone: $tz"
-ask "Log in automatically at boot? (y/n)" y; autologin=$REPLY
+[[ $tz =~ ^[A-Za-z0-9/_+-]+$ && -f /usr/share/zoneinfo/$tz ]] || die "unknown time zone: $tz"
+
+# --- keyboard style -------------------------------------------------------------
+cat <<'EOF'
+
+  Keyboard shortcuts:
+    1) macOS style    Super is ⌘: ⌘C/⌘V copy/paste everywhere, ⌘Q quit, ⌘Space search,
+                      ⌘⇧3/⌘⇧4 screenshots, window buttons on the left
+    2) Windows style  tap Super for apps, Ctrl+C/V, Win+E files, Win+L lock, Win+D desktop,
+                      Win+arrows snap windows, window buttons on the right
+EOF
+ask "Choose 1 or 2" 1
+case $REPLY in 1) keys=mac ;; 2) keys=windows ;; *) die "invalid choice" ;; esac
+
+# --- look -----------------------------------------------------------------------
+cat <<'EOF'
+
+  Theme (change any time from the logo menu):
+    1) Aurora          blue-violet frosted glass
+    2) macOS Graphite  neutral grays, macOS icons and cursor
+EOF
+ask "Choose 1 or 2" "$([[ $keys == mac ]] && echo 2 || echo 1)"
+case $REPLY in 1) theme=aurora ;; 2) theme=macos-graphite ;; *) die "invalid choice" ;; esac
+
+# --- what's it for --------------------------------------------------------------
+echo
+echo "  What will you use this computer for? These are set up on first login (needs the"
+echo "  internet); you can add them later from the logo menu: Set up."
+profiles=()
+for d in /usr/share/lgtm/profiles/*/profile.conf; do
+  d=${d%/profile.conf}; profiles+=("${d##*/}")
+  printf '    %d) %s\n' ${#profiles[@]} "$(. "$d/profile.conf"; echo "$LABEL: $DESCRIPTION")"
+done
+ask "Numbers separated by spaces, or Enter for none" ""
+setup=()
+for n in $REPLY; do
+  [[ $n =~ ^[0-9]+$ && -n ${profiles[$((n-1))]:-} ]] || die "invalid choice: $n"
+  setup+=("${profiles[$((n-1))]}")
+done
+
+# --- encryption and login -------------------------------------------------------
+echo
+echo "  Encrypting the disk protects your files if the computer is lost or stolen."
+echo "  You'll type your password once at startup, then the desktop opens by itself."
+ask "Encrypt the disk? (y/n)" y; encrypt=$REPLY
+if yes "$encrypt"; then
+  autologin=y
+else
+  ask "Log in automatically at boot? (y/n)" n; autologin=$REPLY
+fi
 
 echo
 echo "ALL DATA on $disk will be erased."
 ask "Type ERASE to continue"
 [[ $REPLY == ERASE ]] || die "cancelled"
 
-# --- partition and format -----------------------------------------------------
+# --- partition ------------------------------------------------------------------
+# UEFI: 1 GB EFI partition as /boot (kernels + splash), rest is the system.
+# BIOS: BIOS-boot stub, 1 GB /boot (unencrypted, GRUB reads it), rest is the system.
 uefi=0; [[ -d /sys/firmware/efi ]] && uefi=1
 echo ">> partitioning $disk ($([[ $uefi == 1 ]] && echo UEFI || echo BIOS))"
 umount -R "$MNT" 2>/dev/null || true
+cryptsetup close "$MAPPER" 2>/dev/null || true
 wipefs -af "$disk" >/dev/null
 sgdisk --zap-all "$disk" >/dev/null
 if (( uefi )); then
-  sgdisk -n1:0:+512M -t1:ef00 -c1:EFI -n2:0:0 -t2:8304 -c2:lgtm "$disk" >/dev/null
+  sgdisk -n1:0:+1G -t1:ef00 -c1:EFI -n2:0:0 -t2:8304 -c2:lgtm "$disk" >/dev/null
 else
-  sgdisk -n1:0:+1M -t1:ef02 -c1:bios -n2:0:0 -t2:8304 -c2:lgtm "$disk" >/dev/null
+  sgdisk -n1:0:+1M -t1:ef02 -c1:bios -n2:0:+1G -t2:8300 -c2:boot -n3:0:0 -t3:8304 -c3:lgtm "$disk" >/dev/null
 fi
 partprobe "$disk" 2>/dev/null || true; udevadm settle
-p1=$(part "$disk" 1); p2=$(part "$disk" 2)
+if (( uefi )); then bootp=$(part "$disk" 1); rootp=$(part "$disk" 2)
+else                bootp=$(part "$disk" 2); rootp=$(part "$disk" 3); fi
 
-mkfs.ext4 -qF -L lgtm "$p2"
-mkdir -p "$MNT"; mount -o noatime "$p2" "$MNT"
-if (( uefi )); then
-  mkfs.fat -F32 -n EFI "$p1" >/dev/null
-  mkdir -p "$MNT/boot"; mount "$p1" "$MNT/boot"
+# --- encrypt and format -----------------------------------------------------------
+rootdev=$rootp
+if yes "$encrypt"; then
+  echo ">> encrypting"
+  printf '%s' "$pw1" | cryptsetup luksFormat --type luks2 --batch-mode --label lgtm-crypt "$rootp" -d -
+  printf '%s' "$pw1" | cryptsetup open "$rootp" "$MAPPER" -d -
+  rootdev=/dev/mapper/$MAPPER
+  luks_uuid=$(cryptsetup luksUUID "$rootp")
 fi
+mkfs.ext4 -qF -L lgtm "$rootdev"
+mkdir -p "$MNT"; mount -o noatime "$rootdev" "$MNT"
+mkdir -p "$MNT/boot"
+if (( uefi )); then mkfs.fat -F32 -n EFI "$bootp" >/dev/null
+else                mkfs.ext4 -qF -L boot "$bootp"; fi
+mount "$bootp" "$MNT/boot"
 
 # --- copy the system ------------------------------------------------------------
 echo ">> copying system (this is the long step)"
 unsquashfs -f -q -d "$MNT" "$SFS" >/dev/null || unsquashfs -f -d "$MNT" "$SFS"
 [[ -e $MNT/boot/vmlinuz-linux-zen ]] || cp "$KERNEL" "$MNT/boot/vmlinuz-linux-zen"
 genfstab -U "$MNT" > "$MNT/etc/fstab"
+
+# Kernel options: quiet boot straight into the splash (as on Omarchy).
+cmdline="quiet splash loglevel=0 rd.udev.log_level=0 systemd.show_status=false vt.global_cursor_default=0 zswap.enabled=0 nowatchdog"
+cryptline=""; hooks_crypt=""
+if yes "$encrypt"; then
+  cryptline="rd.luks.name=$luks_uuid=$MAPPER rd.luks.options=discard"
+  hooks_crypt="sd-encrypt"
+fi
+yes "$autologin" && autologin=y || autologin=n
 
 # --- configure inside the new system ------------------------------------------
 echo ">> configuring"
@@ -90,12 +169,18 @@ arch-chroot "$MNT" /bin/bash -e <<CHROOT
 rm -f /etc/mkinitcpio.conf.d/archiso.conf /etc/systemd/system/multi-user.target.wants/lgtm-live.service
 rm -f /etc/systemd/system/lgtm-live.service /usr/local/lib/lgtm-live-setup /etc/sudoers.d/00-live
 pacman -Rdd --noconfirm mkinitcpio-archiso >/dev/null 2>&1 || true
+
+# Boot: systemd initramfs with the splash (and disk unlock when encrypted).
 cat > /etc/mkinitcpio.d/linux-zen.preset <<'EOF'
 ALL_kver="/boot/vmlinuz-linux-zen"
 PRESETS=('default')
 default_image="/boot/initramfs-linux-zen.img"
 EOF
+cat > /etc/mkinitcpio.conf.d/lgtm.conf <<'EOF'
+HOOKS=(base systemd autodetect microcode modconf kms keyboard sd-vconsole block plymouth $hooks_crypt filesystems fsck)
+EOF
 echo 'KEYMAP=us' > /etc/vconsole.conf
+plymouth-set-default-theme lgtm
 mkinitcpio -P >/dev/null
 
 echo '$hostname' > /etc/hostname
@@ -108,25 +193,38 @@ echo 'LANG=en_US.UTF-8' > /etc/locale.conf
 pacman-key --init >/dev/null 2>&1 && pacman-key --populate archlinux >/dev/null 2>&1 || true
 
 useradd -m -G wheel,video,input -s /bin/bash '$username'
+# Rootless containers (.deb/.rpm apps) need subordinate UID/GID ranges.
+grep -q '^$username:' /etc/subuid 2>/dev/null || usermod --add-subuids 100000-165535 --add-subgids 100000-165535 '$username'
 echo '%wheel ALL=(ALL:ALL) ALL' > /etc/sudoers.d/10-wheel
 chmod 440 /etc/sudoers.d/10-wheel
 passwd -l root >/dev/null
 
-if [[ '${autologin,,}' == y* ]]; then
-  cat > /etc/greetd/config.toml <<'EOF'
-[terminal]
-vt = 1
-[default_session]
-command = "tuigreet --time --remember --asterisks --cmd lgtm-session"
-user = "greeter"
-[initial_session]
-command = "lgtm-session"
-user = "$username"
-EOF
+lgtm-keys '$keys' >/dev/null
+# Theme: its icons/cursor come from the offline [lgtm] repo, so no internet needed.
+if [[ -r /usr/share/lgtm/themes/$theme/packages ]]; then
+  lgtm-pkg /usr/share/lgtm/themes/$theme/packages >/dev/null || echo "note: install the theme's icons later with: lgtm-theme $theme"
 fi
+lgtm-theme --default '$theme' >/dev/null
+# Setup profiles run at first login, in a terminal, once there's internet.
+if [[ -n '${setup[*]}' ]]; then echo '${setup[*]}' > /etc/lgtm/setup-pending; fi
+
+# Login screen: graphical (ReGreet), only shown when not logging in automatically.
+{
+  echo '[terminal]'
+  echo 'vt = 1'
+  echo '[default_session]'
+  echo 'command = "cage -s -m last -- regreet --config /usr/share/lgtm/regreet/regreet.toml --style /usr/share/lgtm/regreet/regreet.css"'
+  echo 'user = "greeter"'
+  if [[ $autologin == y ]]; then
+    echo '[initial_session]'
+    echo 'command = "lgtm-session"'
+    echo 'user = "$username"'
+  fi
+} > /etc/greetd/config.toml
 
 sed -i -E 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=0/; s/^GRUB_TIMEOUT_STYLE=.*/GRUB_TIMEOUT_STYLE=hidden/' /etc/default/grub
-sed -i -E 's|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT="quiet loglevel=3 zswap.enabled=0 nowatchdog"|' /etc/default/grub
+sed -i -E 's|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT="$cmdline"|' /etc/default/grub
+sed -i -E 's|^GRUB_CMDLINE_LINUX=.*|GRUB_CMDLINE_LINUX="$cryptline"|' /etc/default/grub
 sed -i -E 's/^GRUB_DISTRIBUTOR=.*/GRUB_DISTRIBUTOR="LGTM OS"/' /etc/default/grub
 if [[ $uefi == 1 ]]; then
   grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=LGTM >/dev/null
@@ -140,5 +238,6 @@ echo "$username:$pw1" | arch-chroot "$MNT" chpasswd
 
 sync
 umount -R "$MNT"
+if yes "$encrypt"; then cryptsetup close "$MAPPER"; fi
 echo
 echo "Done. Remove the install media and reboot."

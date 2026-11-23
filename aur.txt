@@ -1,4 +1,8 @@
-# AUR packages built into the local repo by build.sh. Prebuilt -bin packages only.
+# AUR packages built into the local repo by build.sh: prebuilt -bin packages and plain
+# asset packages only (nothing that compiles). Bigger AUR software (Looking Glass,
+# Heroic) is built on the target by lgtm-pkg when a setup profile asks for it.
 # install = goes into the ISO; repo = available offline but not installed.
 teams-for-linux-bin install
 darling-bin         repo
+whitesur-icon-theme repo
+apple_cursor        repo

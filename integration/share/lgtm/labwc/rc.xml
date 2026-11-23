@@ -1,32 +1,23 @@
 <?xml version="1.0"?>
-<!-- LGTM OS lite mode (labwc). Mac-style: buttons on the left, rounded corners. -->
+<!-- LGTM OS lite mode (labwc). lgtm-session fills in @...@ from the keyboard style
+     (keys/<style>/labwc.xml) and writes the running copy to $XDG_RUNTIME_DIR/lgtm/labwc/. -->
 <labwc_config>
   <core><gap>0</gap><adaptiveSync>no</adaptiveSync></core>
   <placement><policy>center</policy></placement>
+  <desktops><number>4</number></desktops>
   <theme>
     <name></name>
     <cornerRadius>10</cornerRadius>
     <font place="ActiveWindow"><name>Inter</name><size>10</size><weight>bold</weight></font>
     <font place="InactiveWindow"><name>Inter</name><size>10</size></font>
     <font place="MenuItem"><name>Inter</name><size>10</size></font>
-    <titlebar><layout>close,iconify,max:</layout><showTitle>yes</showTitle></titlebar>
+    <titlebar><layout>@TITLEBAR_LAYOUT@</layout><showTitle>yes</showTitle></titlebar>
     <dropShadows>no</dropShadows>
   </theme>
   <focus><followMouse>no</followMouse><raiseOnFocus>yes</raiseOnFocus></focus>
   <keyboard>
     <default />
-    <keybind key="W-space"><action name="Execute" command="fuzzel" /></keybind>
-    <keybind key="W-Return"><action name="Execute" command="foot" /></keybind>
-    <keybind key="W-e"><action name="Execute" command="thunar" /></keybind>
-    <keybind key="W-q"><action name="Close" /></keybind>
-    <keybind key="W-m"><action name="Iconify" /></keybind>
-    <keybind key="W-f"><action name="ToggleFullscreen" /></keybind>
-    <keybind key="W-Escape"><action name="Execute" command="lgtm-power" /></keybind>
-    <keybind key="XF86AudioRaiseVolume"><action name="Execute" command="wpctl set-volume -l 1 @DEFAULT_AUDIO_SINK@ 5%+" /></keybind>
-    <keybind key="XF86AudioLowerVolume"><action name="Execute" command="wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-" /></keybind>
-    <keybind key="XF86AudioMute"><action name="Execute" command="wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle" /></keybind>
-    <keybind key="XF86MonBrightnessUp"><action name="Execute" command="brightnessctl set +5%" /></keybind>
-    <keybind key="XF86MonBrightnessDown"><action name="Execute" command="brightnessctl set 5%-" /></keybind>
+    <!-- @KEYBINDS@ -->
   </keyboard>
   <mouse><default /></mouse>
   <libinput><device category="touchpad"><naturalScroll>yes</naturalScroll><tap>yes</tap></device></libinput>

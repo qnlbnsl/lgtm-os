@@ -1,6 +1,2 @@
-/* Lite mode: no blur, so raise opacity to keep text readable. Same shapes. */
-window#waybar.top { background: rgba(32, 34, 44, 0.85); }
-window#waybar.dock .modules-center {
-  background: rgba(60, 64, 80, 0.80);
-  box-shadow: none;
-}
+/* Lite mode: no blur, so the theme's opaque bar/dock colours are used (theme.css). */
+window#waybar.dock .modules-center { box-shadow: none; }

@@ -1,0 +1,14 @@
+# Windows 11 VM with GPU passthrough + Looking Glass.
+qemu-full
+libvirt
+edk2-ovmf
+swtpm
+dnsmasq
+virt-manager
+virt-viewer
+dkms
+linux-zen-headers
+usbutils
+# Looking Glass client + its kernel module (shared framebuffer, /dev/kvmfr0).
+# Built from the AUR on first setup: it needs the kernel headers above.
+aur:looking-glass looking-glass looking-glass-module-dkms

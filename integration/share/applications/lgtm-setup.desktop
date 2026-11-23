@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=LGTM OS Setup
+Comment=Set this computer up for gaming, a Windows VM, or development
+Exec=lgtm-setup --pick
+Icon=preferences-system
+Categories=Settings;System;
+Keywords=gaming;steam;windows;vm;developer;profile;setup;

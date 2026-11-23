@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# lgtm-setup: turn this LGTM OS machine into a gaming PC, a Windows VM host, a dev box...
+#
+#   lgtm-setup                 list setup profiles (✓ = done)
+#   lgtm-setup NAME...         set up those profiles (gaming, windows-vm, dev, ...)
+#   lgtm-setup --pick          choose from a menu
+#   lgtm-setup --first-login   (desktop autostart) finish what the installer queued
+#
+# A profile is a folder in /usr/share/lgtm/profiles/: profile.conf (name, description),
+# `packages` (see lgtm-pkg) and an optional `setup` script run as root afterwards.
+# Needs the internet. Safe to run again: it only adds what's missing.
+set -euo pipefail
+shopt -s nullglob
+
+PROFILES=${LGTM_SHARE:-/usr/share/lgtm}/profiles
+DONE=/var/lib/lgtm/profiles
+PENDING=/etc/lgtm/setup-pending
+
+die() { echo "lgtm-setup: $*" >&2; exit 1; }
+label() { (. "$PROFILES/$1/profile.conf"; echo "$LABEL"); }
+desc() { (. "$PROFILES/$1/profile.conf"; echo "$DESCRIPTION"); }
+names() { local d; for d in "$PROFILES"/*/profile.conf; do d=${d%/profile.conf}; echo "${d##*/}"; done; }
+
+in_terminal() {  # re-run in a terminal when started from the menu/autostart
+  [[ -t 0 ]] && return 0
+  exec foot --app-id=lgtm.setup --title="LGTM OS setup" -e bash -c \
+    "$(printf '%q ' "$0" "$@"); echo; read -rp 'Press Enter to close' _"
+}
+
+run() {
+  local p
+  for p in "$@"; do [[ -r $PROFILES/$p/profile.conf ]] || die "no profile '$p' (see: lgtm-setup)"; done
+  [[ $EUID -ne 0 ]] || die "run as your user (it asks for your password when needed)"
+  for p in "$@"; do
+    echo; echo "=== $(label "$p") ==="
+    lgtm-pkg "$PROFILES/$p/packages"
+    if [[ -x $PROFILES/$p/setup ]]; then
+      sudo env LGTM_USER="$USER" "$PROFILES/$p/setup"
+    fi
+    sudo install -d "$DONE"; sudo touch "$DONE/$p"
+  done
+  echo; echo "All set. Log out and back in if a profile added you to new groups."
+}
+
+case ${1:-} in
+  "")
+    for n in $(names); do
+      printf '%s %-11s %s\n' "$([[ -e $DONE/$n ]] && echo ✓ || echo ' ')" "$n" "$(label "$n")"
+      printf '              %s\n' "$(desc "$n")"
+    done ;;
+  --pick)
+    lines=(); for n in $(names); do lines+=("$(label "$n")$([[ -e $DONE/$n ]] && echo '  ✓')"); done
+    choice=$(printf '%s\n' "${lines[@]}" | fuzzel --dmenu --prompt "Set up  " --lines ${#lines[@]}) || exit 0
+    for n in $(names); do [[ ${choice%  ✓} == "$(label "$n")" ]] && { in_terminal "$n"; run "$n"; }; done ;;
+  --first-login)
+    [[ -s $PENDING ]] || exit 0
+    in_terminal --first-login
+    read -ra todo < "$PENDING"
+    echo "Finishing setup chosen during install: ${todo[*]}"
+    until curl -fsI --max-time 5 https://archlinux.org >/dev/null 2>&1; do
+      echo "Waiting for the internet (connect Wi-Fi from the top bar)…"; sleep 5
+    done
+    run "${todo[@]}" && sudo rm -f "$PENDING" ;;
+  -h|--help) sed -n '2,13p' "$0" ;;
+  *) in_terminal "$@"; run "$@" ;;
+esac

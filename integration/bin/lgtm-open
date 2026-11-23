@@ -1,0 +1,155 @@
+#!/usr/bin/env bash
+# lgtm-open: install or run any app package, whatever it was built for.
+#
+#   lgtm-open FILE          (the double-click handler for every package type)
+#
+#   .exe .msi .bat .lnk     Windows          -> lgtm-exe (Wine/Proton)
+#   .apk                    Android          -> lgtm-android (Waydroid)
+#   .dmg .app               macOS (preview)  -> lgtm-mac (Darling)
+#   .deb                    Debian/Ubuntu    -> Ubuntu container (distrobox + podman)
+#   .rpm                    Fedora/RHEL/SUSE -> Fedora container (distrobox + podman)
+#   .AppImage               any Linux        -> ~/Applications + menu entry
+#   .flatpak .flatpakref    Flatpak          -> flatpak --user (Flathub)
+#   .pkg.tar.zst            Arch             -> pacman
+#
+# Containers are rootless podman: no daemon, so no RAM is used until an app runs.
+# Every installed app shows up in the app menu like a native one.
+set -euo pipefail
+
+CACHE=${XDG_CACHE_HOME:-$HOME/.cache}/lgtm
+DATA=${XDG_DATA_HOME:-$HOME/.local/share}
+APPDIR=$HOME/Applications
+DEB_BOX=lgtm-ubuntu  DEB_IMAGE=docker.io/library/ubuntu:24.04
+RPM_BOX=lgtm-fedora  RPM_IMAGE=registry.fedoraproject.org/fedora:latest
+
+mkdir -p "$CACHE/logs"
+notify() { command -v notify-send >/dev/null && notify-send -a "LGTM OS" -i system-software-install "$@" 2>/dev/null || true; }
+fail()   { notify "Couldn't install $name" "$1 Log: $log"; echo "error: $1 (log: $log)" >&2; exit 1; }
+
+[[ $# -ge 1 ]] || { sed -n '2,17p' "$0"; exit 2; }
+file=$(realpath -- "$1"); shift
+[[ -e $file ]] || { echo "no such file: $file" >&2; exit 1; }
+name=$(basename -- "$file")
+log=$CACHE/logs/${name%%.*}.log
+: > "$log"
+
+# ---- containers (deb/rpm) ------------------------------------------------------
+
+box_ready() {  # box_ready NAME IMAGE SETUP-CMD
+  local box=$1 image=$2 setup=$3
+  podman container exists "$box" 2>/dev/null && return 0
+  notify "Setting up $box" "One-time download of a small base system (about 100 MB)."
+  distrobox create --yes --no-entry --name "$box" --image "$image" >>"$log" 2>&1 \
+    || fail "Couldn't create the $box container (are you online?)."
+  distrobox enter --no-tty "$box" -- sh -c "$setup" >>"$log" 2>&1 || true
+}
+
+in_box() { local box=$1; shift; distrobox enter --no-tty "$box" -- "$@"; }
+
+# Stage the file inside $HOME: distrobox always shares $HOME with the container.
+stage() { mkdir -p "$CACHE/pkgs"; cp -f -- "$file" "$CACHE/pkgs/$name"; echo "$CACHE/pkgs/$name"; }
+
+# Export the package's apps to the host menu; command-line tools to ~/.local/bin.
+export_from_box() {  # export_from_box BOX "file-list command"
+  local box=$1 listcmd=$2 exported=0 f
+  while read -r f; do
+    [[ -n $f ]] || continue
+    in_box "$box" distrobox-export --app "$f" --export-label none >>"$log" 2>&1 && exported=1
+  done < <(in_box "$box" sh -c "$listcmd" 2>>"$log" | grep -E '^/usr/share/applications/.+\.desktop$' || true)
+  if (( ! exported )); then
+    mkdir -p "$HOME/.local/bin"
+    while read -r f; do
+      [[ -n $f ]] || continue
+      in_box "$box" distrobox-export --bin "$f" --export-path "$HOME/.local/bin" >>"$log" 2>&1 && exported=1
+    done < <(in_box "$box" sh -c "$listcmd" 2>>"$log" | grep -E '^/(usr/)?(s)?bin/[^/]+$' || true)
+  fi
+  return $(( ! exported ))
+}
+
+install_deb() {
+  box_ready "$DEB_BOX" "$DEB_IMAGE" "sudo apt-get update -qq"
+  local f pkg; f=$(stage)
+  pkg=$(in_box "$DEB_BOX" dpkg-deb -f "$f" Package 2>>"$log" | tr -d '\r') || fail "Not a valid .deb file."
+  notify "Installing $pkg" "From $name"
+  # apt resolves the .deb's dependencies from Ubuntu's archive; vendor repos the
+  # package adds (Chrome, VS Code, ...) keep it updated inside the container.
+  in_box "$DEB_BOX" sh -c "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y '$f' || \
+      (sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y '$f')" >>"$log" 2>&1 \
+    || fail "apt couldn't install it."
+  export_from_box "$DEB_BOX" "dpkg -L '$pkg'" || fail "Installed, but it has no app or command to add to the menu."
+  notify "$pkg is installed" "It's in your app menu."
+}
+
+install_rpm() {
+  box_ready "$RPM_BOX" "$RPM_IMAGE" "true"
+  local f pkg; f=$(stage)
+  pkg=$(in_box "$RPM_BOX" rpm -qp --qf '%{NAME}' "$f" 2>>"$log") || fail "Not a valid .rpm file."
+  notify "Installing $pkg" "From $name"
+  in_box "$RPM_BOX" sudo dnf install -y "$f" >>"$log" 2>&1 || fail "dnf couldn't install it."
+  export_from_box "$RPM_BOX" "rpm -ql '$pkg'" || fail "Installed, but it has no app or command to add to the menu."
+  notify "$pkg is installed" "It's in your app menu."
+}
+
+# ---- AppImage ------------------------------------------------------------------
+
+install_appimage() {
+  mkdir -p "$APPDIR" "$DATA/applications/lgtm" "$DATA/lgtm/icons"
+  local dest=$APPDIR/$name
+  [[ $file == "$dest" ]] || cp -f -- "$file" "$dest"
+  chmod +x "$dest"
+  local key=${name%.*}; key=${key// /-}
+  local tmp; tmp=$(mktemp -d); trap 'rm -rf "$tmp"' RETURN
+  # Extraction doesn't need FUSE; it unpacks into ./squashfs-root.
+  (cd "$tmp" && "$dest" --appimage-extract '*.desktop' && "$dest" --appimage-extract .DirIcon) >>"$log" 2>&1 || true
+  local desk; desk=$(ls "$tmp"/squashfs-root/*.desktop 2>/dev/null | head -n1 || true)
+  local icon=application-x-executable
+  if [[ -e $tmp/squashfs-root/.DirIcon || -L $tmp/squashfs-root/.DirIcon ]]; then
+    # .DirIcon may be a symlink into the image; extract its target as well.
+    local tgt; tgt=$(readlink "$tmp/squashfs-root/.DirIcon" || true)
+    [[ -n $tgt ]] && (cd "$tmp" && "$dest" --appimage-extract "$tgt") >>"$log" 2>&1 || true
+    cp -L "$tmp/squashfs-root/.DirIcon" "$DATA/lgtm/icons/$key.png" 2>/dev/null && icon=$DATA/lgtm/icons/$key.png
+  fi
+  local out=$DATA/applications/lgtm/appimage-$key.desktop qdest=${dest//\"/\\\"}
+  if [[ -n $desk ]]; then
+    # Keep the app's own name/categories/mime types; point Exec and Icon at our copy.
+    sed -E -e "s|^Exec=[^ ]*|Exec=\"$qdest\"|" -e "s|^Icon=.*|Icon=$icon|" -e '/^TryExec=/d' "$desk" > "$out"
+  else
+    printf '[Desktop Entry]\nType=Application\nName=%s\nExec="%s" %%U\nIcon=%s\n' "${key%%-*}" "$qdest" "$icon" > "$out"
+  fi
+  printf 'X-LGTM-Source=appimage\nX-LGTM-Target=%s\n' "$dest" >> "$out"
+  notify "$(sed -n 's/^Name=//p' "$out" | head -n1) is installed" "It's in your app menu. The file lives in ~/Applications."
+}
+
+# ---- Flatpak ---------------------------------------------------------------------
+
+install_flatpak() {
+  flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo >>"$log" 2>&1 || true
+  notify "Installing $name" "Using Flatpak."
+  flatpak install --user -y --noninteractive "$file" >>"$log" 2>&1 || fail "Flatpak couldn't install it."
+  notify "Installed" "$name is in your app menu."
+}
+
+# ---- dispatch --------------------------------------------------------------------
+
+lower=${name,,}
+case $lower in
+  *.exe|*.msi|*.bat|*.cmd|*.lnk) exec lgtm-exe "$file" "$@" ;;
+  *.apk|*.xapk)                  exec lgtm-android install "$file" ;;
+  *.dmg|*.app)                   exec lgtm-mac run "$file" "$@" ;;
+  *.deb)                         install_deb ;;
+  *.rpm)                         install_rpm ;;
+  *.appimage)                    install_appimage ;;
+  *.flatpak|*.flatpakref)        install_flatpak ;;
+  *.pkg.tar.zst|*.pkg.tar.xz)    exec foot -e sh -c "sudo pacman -U -- '$file'; echo; read -rp 'Press Enter to close' _" ;;
+  *.snap) notify "Snap packages aren't supported" "Most snaps are also on Flathub; search for the app there."; exit 1 ;;
+  *)
+    # No known extension: look at the content.
+    case $(file -b --mime-type -- "$file") in
+      application/x-dosexec|application/vnd.microsoft.portable-executable) exec lgtm-exe "$file" "$@" ;;
+      application/vnd.debian.binary-package) install_deb ;;
+      application/x-rpm) install_rpm ;;
+      application/x-executable|application/x-pie-executable)
+        head -c 16 -- "$file" | grep -q 'AI' && install_appimage || exec "$file" "$@" ;;
+      *) exec xdg-open "$file" ;;
+    esac ;;
+esac

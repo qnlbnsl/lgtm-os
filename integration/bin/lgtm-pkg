@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# lgtm-pkg: install what a theme or setup profile needs, from a plain-text list.
+#
+#   lgtm-pkg FILE...      install every package listed in FILE(s)
+#   lgtm-pkg --check FILE print the packages that are still missing (exit 1 if any)
+#
+# List format, one per line ('#' comments allowed):
+#   name                   from the Arch repos or LGTM OS's offline [lgtm] repo
+#   aur:BASE [name...]     built from the AUR (only if not already in a repo), installing
+#                          the named packages of that pkgbase (default: BASE)
+# Run as your user: it asks for your password (sudo) to install. AUR builds never run
+# as root.
+set -euo pipefail
+
+die() { echo "lgtm-pkg: $*" >&2; exit 1; }
+entries() { sed -e 's/#.*//' -e 's/[[:space:]]*$//' "$@" | grep -v '^[[:space:]]*$' || true; }
+installed() { pacman -Q "$1" >/dev/null 2>&1; }
+in_repo() { pacman -Si "$1" >/dev/null 2>&1; }
+
+check=0; [[ ${1:-} == --check ]] && { check=1; shift; }
+(( $# )) || { sed -n '2,13p' "$0"; exit 2; }
+
+repo=() aur=() missing=()
+while read -r first rest; do
+  if [[ $first == aur:* ]]; then
+    base=${first#aur:}; names=${rest:-$base}
+    for n in $names; do installed "$n" || missing+=("$n"); done
+    want=()
+    for n in $names; do installed "$n" || want+=("$n"); done
+    (( ${#want[@]} )) || continue
+    # Prefer a prebuilt copy in a repo (LGTM OS ships some offline).
+    if in_repo "${want[0]}"; then repo+=("${want[@]}"); else aur+=("$base:${want[*]}"); fi
+  else
+    installed "$first" || { missing+=("$first"); repo+=("$first"); }
+  fi
+done < <(entries "$@")
+
+if (( check )); then
+  (( ${#missing[@]} )) && { printf '%s\n' "${missing[@]}"; exit 1; }
+  exit 0
+fi
+(( ${#repo[@]} + ${#aur[@]} )) || { echo "Everything is already installed."; exit 0; }
+
+SUDO=sudo; [[ $EUID -eq 0 ]] && SUDO=
+if (( ${#repo[@]} )); then
+  echo ">> installing: ${repo[*]}"
+  # Refresh first when online; offline (installer), the [lgtm] repo still works without it.
+  $SUDO pacman -Sy --needed --noconfirm "${repo[@]}" 2>/dev/null || $SUDO pacman -S --needed --noconfirm "${repo[@]}"
+fi
+for a in "${aur[@]}"; do
+  [[ $EUID -ne 0 ]] || die "AUR packages can't be built as root; run lgtm-pkg as your user"
+  base=${a%%:*}; read -ra want <<<"${a#*:}"
+  d=${XDG_CACHE_HOME:-$HOME/.cache}/lgtm/aur/$base
+  echo ">> building $base from the AUR (https://aur.archlinux.org/packages/$base)"
+  if [[ -d $d/.git ]]; then git -C "$d" pull -q --ff-only; else git clone -q "https://aur.archlinux.org/$base.git" "$d"; fi
+  rm -rf "$d/out"; mkdir -p "$d/out"
+  # -s installs build dependencies, -r removes them again afterwards.
+  (cd "$d" && PKGDEST=$d/out makepkg -sr --noconfirm --needed)
+  files=()
+  for n in "${want[@]}"; do
+    f=$(ls "$d"/out/"$n"-[0-9]*.pkg.tar.zst "$d"/out/"$n"-[0-9]*:*.pkg.tar.zst 2>/dev/null | head -1 || true)
+    [[ -n $f ]] || die "$base built no package named $n"
+    files+=("$f")
+  done
+  sudo pacman -U --needed --noconfirm "${files[@]}"
+done
+echo ">> done"

@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Gaming profile, run as root after its packages. $LGTM_USER = the desktop user.
+set -euo pipefail
+# Vulkan driver (and 32-bit version for Proton) for each GPU vendor present.
+pkgs=()
+for v in /sys/class/drm/card[0-9]*/device/vendor; do
+  case $(cat "$v") in
+    0x1002) pkgs+=(vulkan-radeon lib32-vulkan-radeon) ;;
+    0x8086) pkgs+=(vulkan-intel lib32-vulkan-intel) ;;
+    0x10de) pkgs+=(nvidia-open-dkms linux-zen-headers nvidia-utils lib32-nvidia-utils) ;;
+  esac
+done
+(( ${#pkgs[@]} )) && pacman -S --needed --noconfirm "${pkgs[@]}"
+# GE-Proton needs no linking: Steam reads /usr/share/steam/compatibilitytools.d itself.
+usermod -aG gamemode "$LGTM_USER" 2>/dev/null || true
+echo "Gaming ready. In Steam: Settings > Compatibility > enable Steam Play, pick GE-Proton."
+echo "Launch options for any game: gamemoderun mangohud %command%"

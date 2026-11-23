@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Install App
+Comment=Install or run any app package (.deb .rpm .AppImage .flatpak .exe .apk ...)
+Exec=lgtm-open %f
+Icon=system-software-install
+NoDisplay=true
+Terminal=false
+MimeType=application/vnd.debian.binary-package;application/x-deb;application/x-rpm;application/x-redhat-package-manager;application/vnd.appimage;application/x-iso9660-appimage;application/vnd.flatpak;application/vnd.flatpak.ref;application/vnd.flatpak.repo;application/x-alpm-package;application/x-zstd-compressed-tar;

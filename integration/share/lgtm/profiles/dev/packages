@@ -1,0 +1,23 @@
+# Developer and agentic workflows. Agents themselves (Claude Code, Codex, opencode,
+# Gemini) install on first use from the dock's AI button (lgtm-agent).
+base-devel
+git
+github-cli
+lazygit
+nodejs
+npm
+python
+uv
+go
+rustup
+ripgrep
+fd
+fzf
+jq
+bat
+eza
+tmux
+neovim
+podman-compose
+podman-docker
+openssh

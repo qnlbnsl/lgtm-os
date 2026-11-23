@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# lgtm-keys: choose the keyboard style for this computer.
+#
+#   lgtm-keys                 show the current style
+#   sudo lgtm-keys mac        macOS style: Super is ⌘ (⌘C/⌘V/⌘Q/⌘Space...)
+#   sudo lgtm-keys windows    Windows style: tap Super for the launcher, Win+E/L/D...
+#
+# Stored in /etc/lgtm/keys. For mac, enables keyd with /etc/keyd/lgtm-mac.conf (a ~1 MB
+# daemon that turns ⌘C etc. into app shortcuts). Desktop shortcuts change at next login.
+set -euo pipefail
+cur=$(cat /etc/lgtm/keys 2>/dev/null || echo windows)
+[[ $# -eq 0 ]] && { echo "$cur"; exit 0; }
+style=$1
+[[ $style == mac || $style == windows ]] || { echo "usage: lgtm-keys [mac|windows]" >&2; exit 2; }
+[[ $EUID -eq 0 ]] || exec sudo -- "$0" "$@"
+
+mkdir -p /etc/lgtm /etc/keyd
+echo "$style" > /etc/lgtm/keys
+if [[ $style == mac ]]; then
+  install -m644 /usr/share/lgtm/keys/mac/keyd.conf /etc/keyd/lgtm-mac.conf
+  # In a chroot (installer) only enable; on a running system also (re)start.
+  if [[ -d /run/systemd/system ]] && ! systemd-detect-virt -qr 2>/dev/null; then
+    systemctl enable --now keyd.service >/dev/null 2>&1 && systemctl restart keyd.service
+  else
+    systemctl enable keyd.service >/dev/null 2>&1
+  fi
+else
+  rm -f /etc/keyd/lgtm-mac.conf
+  if [[ -z $(ls -A /etc/keyd 2>/dev/null) ]]; then
+    systemctl disable --now keyd.service >/dev/null 2>&1 || true
+  elif [[ -d /run/systemd/system ]]; then
+    systemctl restart keyd.service >/dev/null 2>&1 || true   # other keyd configs stay active
+  fi
+fi
+echo "Keyboard style: $style. Log out and back in to apply the desktop shortcuts."

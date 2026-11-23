@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
 """Generate LGTM OS's default wallpaper: a soft aurora gradient, as a PNG.
-Pure standard library, so it runs inside makepkg. Usage: make-wallpaper.py OUT [W H]"""
+Pure standard library, so it runs inside makepkg. Usage: make-wallpaper.py OUT [W H [aurora|graphite]]"""
 import math, struct, sys, zlib
 
 out = sys.argv[1]
 W, H = (int(sys.argv[2]), int(sys.argv[3])) if len(sys.argv) > 3 else (1920, 1080)
-# (x, y, radius, rgb) glow blobs over a deep blue base
-blobs = [(0.15, 0.20, 0.55, (64, 170, 220)), (0.85, 0.25, 0.50, (150, 100, 230)),
-         (0.55, 0.95, 0.60, (30, 190, 160)), (0.40, 0.45, 0.35, (90, 120, 230))]
-base = (14, 20, 40)
+style = sys.argv[4] if len(sys.argv) > 4 else "aurora"
+# (x, y, radius, rgb) glow blobs over a base colour
+PALETTES = {
+    "aurora": ((14, 20, 40), [(0.15, 0.20, 0.55, (64, 170, 220)), (0.85, 0.25, 0.50, (150, 100, 230)),
+                              (0.55, 0.95, 0.60, (30, 190, 160)), (0.40, 0.45, 0.35, (90, 120, 230))]),
+    "graphite": ((22, 22, 23), [(0.20, 0.15, 0.60, (78, 78, 80)), (0.85, 0.80, 0.55, (58, 58, 60)),
+                                (0.55, 0.40, 0.40, (96, 96, 98)), (0.05, 0.95, 0.45, (44, 44, 46))]),
+}
+base, blobs = PALETTES[style]
 rows = []
 for j in range(H):
     y = j / H

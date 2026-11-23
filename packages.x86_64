@@ -25,6 +25,10 @@ impala
 # --- desktop: greetd -> lgtm-session -> wayfire (glass) | labwc (lite) ---
 greetd
 greetd-tuigreet
+greetd-regreet
+cage
+plymouth
+cryptsetup
 labwc
 wayfire
 waybar
@@ -43,6 +47,11 @@ noto-fonts
 adwaita-icon-theme
 firefox
 brightnessctl
+grim
+slurp
+swaylock
+keyd
+xdg-user-dirs
 wlr-randr
 # --- audio (socket-activated: costs nothing until used) ---
 pipewire
@@ -69,6 +78,12 @@ lib32-alsa-plugins
 lib32-gnutls
 icoutils
 python
+# --- other Linux packages: .deb/.rpm in rootless containers, AppImage, Flatpak ---
+distrobox
+podman
+fuse2
+flatpak
+file
 # --- Android ---
 waydroid
 # --- memory ---

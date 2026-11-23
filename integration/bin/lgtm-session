@@ -5,15 +5,35 @@
 #   glass  Wayfire + real blur + wallpaper. Needs a GPU and >= 1.5 GB RAM.
 #   lite   labwc, translucent without blur, solid background. Fits in 128 MB.
 #
-# Override in ~/.config/lgtm/session.conf:   MODE=glass | lite | auto
+# Keyboard style (chosen in the installer, stored in /etc/lgtm/keys):
+#   mac      Super is ⌘: ⌘C/⌘V/⌘Q/⌘Space..., window buttons on the left
+#   windows  tap Super for the launcher, Win+E/L/D/arrows, buttons on the right
+# Theme (/etc/lgtm/theme, from /usr/share/lgtm/themes/): aurora, macos-graphite, ...
+#
+# Per-user overrides in ~/.config/lgtm/session.conf:
+#   MODE=glass | lite | auto
+#   KEYS=mac | windows      (the ⌘C/⌘V remapping itself is system-wide: lgtm-keys)
+#   THEME=<name>            (lgtm-theme sets this)
+#
+#   lgtm-session           start the desktop
+#   lgtm-session --apply   rebuild the configs and reload the running desktop
+#                          (after changing the theme or keyboard style)
 set -euo pipefail
 
-SHARE=/usr/share/lgtm
+SHARE=${LGTM_SHARE:-/usr/share/lgtm}
 RUN=${XDG_RUNTIME_DIR:-/tmp}/lgtm
 CONF=${XDG_CONFIG_HOME:-$HOME/.config}/lgtm/session.conf
 MODE=auto
+KEYS=$(cat /etc/lgtm/keys 2>/dev/null || echo windows)
+THEME=$(cat /etc/lgtm/theme 2>/dev/null || echo aurora)
+APPLY=0; [[ ${1:-} == --apply ]] && APPLY=1
 # shellcheck disable=SC1090
 [[ -r $CONF ]] && . "$CONF"
+if (( APPLY )) && [[ -n ${LGTM_MODE:-} ]]; then MODE=$LGTM_MODE; fi   # a running session keeps its mode
+[[ $KEYS == mac || $KEYS == windows ]] || KEYS=windows
+USER_THEMES=${XDG_CONFIG_HOME:-$HOME/.config}/lgtm/themes
+theme_dir() { if [[ -r $USER_THEMES/$1/theme.conf ]]; then echo "$USER_THEMES/$1"; else echo "$SHARE/themes/$1"; fi; }
+[[ -r $(theme_dir "$THEME")/theme.conf ]] || THEME=aurora
 
 gpu_ok() {
   local d drv
@@ -30,44 +50,152 @@ if [[ $MODE == auto ]]; then
   if (( mem >= 1536 )) && gpu_ok && command -v wayfire >/dev/null; then MODE=glass; else MODE=lite; fi
 fi
 
-mkdir -p "$RUN"
-export LGTM_MODE=$MODE LGTM_RUN=$RUN
-export XDG_SESSION_TYPE=wayland XDG_SESSION_DESKTOP=lgtm
-export QT_QPA_PLATFORM="wayland;xcb" ELECTRON_OZONE_PLATFORM_HINT=auto MOZ_ENABLE_WAYLAND=1
-export GTK_THEME=${GTK_THEME:-Adwaita:dark}
+# ---- theme ----
+TDIR=$(theme_dir "$THEME")
+# Aurora's values first, so a partial (user) theme only needs what it changes.
+# shellcheck disable=SC1090,SC1091
+. "$SHARE/themes/aurora/theme.conf"
+# shellcheck disable=SC1090,SC1091
+. "$TDIR/theme.conf"
+WALLPAPER=$TDIR/wallpaper.png
+[[ -e $WALLPAPER ]] || WALLPAPER=$SHARE/themes/aurora/wallpaper.png
+# A theme whose icon/cursor package isn't installed falls back instead of showing blanks.
+[[ -d /usr/share/icons/$ICON_THEME ]] || ICON_THEME=Papirus-Dark
+[[ -d /usr/share/icons/$CURSOR_THEME ]] || CURSOR_THEME=Adwaita
+
+# ---- keyboard style ----
+if [[ $KEYS == mac ]]; then
+  close='<super> KEY_Q | <alt> KEY_F4'; order='close minimize maximize'
+  labwc_layout='close,iconify,max:';    gtk_layout='close,minimize,maximize:'
+else
+  close='<alt> KEY_F4';                 order='minimize maximize close'
+  labwc_layout=':iconify,max,close';    gtk_layout=':minimize,maximize,close'
+fi
 
 # Dock icons: resolve names to files once per login (waybar's image module needs paths).
+# The theme's icon set first, then Papirus, then hicolor.
 icon() {
-  local n t
+  local n t ext i=/usr/share/icons/$ICON_THEME p=/usr/share/icons/Papirus
   for n in "$@"; do
-    for t in /usr/share/icons/Papirus/64x64/apps /usr/share/icons/Papirus/64x64/places \
-             /usr/share/icons/Papirus/64x64/categories /usr/share/icons/hicolor/scalable/apps \
-             /usr/share/icons/hicolor/256x256/apps /usr/share/icons/hicolor/128x128/apps; do
+    for t in "$i/apps/scalable" "$i/places/scalable" "$i/64x64/apps" "$i/scalable/apps" \
+             "$p/64x64/apps" "$p/64x64/places" "$p/64x64/categories" \
+             /usr/share/icons/hicolor/scalable/apps /usr/share/icons/hicolor/256x256/apps \
+             /usr/share/icons/hicolor/128x128/apps; do
       for ext in svg png; do [[ -e $t/$n.$ext ]] && { echo "$t/$n.$ext"; return; }; done
     done
   done
   echo "$SHARE/lgtm-logo.svg"
 }
-sed -e "s|@LOGO@|$SHARE/lgtm-logo.svg|g" \
-    -e "s|@ICON_APPS@|$(icon view-app-grid-symbolic applications-all preferences-desktop-apps applications-other)|" \
-    -e "s|@ICON_SEARCH@|$(icon system-search search)|" \
-    -e "s|@ICON_FILES@|$(icon org.xfce.thunar thunar system-file-manager file-manager)|" \
-    -e "s|@ICON_WEB@|$(icon firefox web-browser)|" \
-    -e "s|@ICON_TERM@|$(icon foot utilities-terminal terminal)|" \
-    -e "s|@ICON_TEAMS@|$(icon teams-for-linux teams msteams)|" \
-    -e "s|@ICON_ANDROID@|$(icon waydroid android)|" \
-    "$SHARE/waybar/config.jsonc.in" > "$RUN/waybar.jsonc"
-{
-  echo "@import url(\"file://$SHARE/waybar/style.css\");"
-  [[ $MODE == lite ]] && echo "@import url(\"file://$SHARE/waybar/lite.css\");"
-} > "$RUN/waybar.css"
+
+configure() {
+  mkdir -p "$RUN/xdg/gtk-3.0" "$RUN/xdg/foot" "$RUN/xdg/fuzzel"
+
+  # Wayfire (glass mode)
+  { sed -e "s/@CLOSE_TOP_VIEW@/$close/" -e "s/@BUTTON_ORDER@/$order/" \
+        -e "s|@WALLPAPER@|$WALLPAPER|" \
+        -e "s/@DECOR_ACTIVE@/$DECOR_ACTIVE/" -e "s/@DECOR_INACTIVE@/$DECOR_INACTIVE/" \
+        "$SHARE/wayfire.ini"
+    cat "$SHARE/keys/$KEYS/wayfire.ini"; } > "$RUN/wayfire.ini.new"
+  mv -f "$RUN/wayfire.ini.new" "$RUN/wayfire.ini"   # Wayfire reloads it on change
+
+  # labwc (lite mode)
+  rm -rf "$RUN/labwc.new"; cp -r "$SHARE/labwc" "$RUN/labwc.new"
+  sed -e "s/@TITLEBAR_LAYOUT@/$labwc_layout/" \
+      -e "/@KEYBINDS@/{r $SHARE/keys/$KEYS/labwc.xml" -e 'd}' \
+      "$SHARE/labwc/rc.xml" > "$RUN/labwc.new/rc.xml"
+  sed -i -e "s/^window.active.title.bg.color:.*/window.active.title.bg.color: #$TITLE_ACTIVE/" \
+         -e "s/^window.inactive.title.bg.color:.*/window.inactive.title.bg.color: #$TITLE_INACTIVE/" \
+         -e "s/^window.active.label.text.color:.*/window.active.label.text.color: #$FG/" \
+         -e "s/^window.inactive.label.text.color:.*/window.inactive.label.text.color: #$FG_DIM/" \
+         -e "s/^menu.items.bg.color:.*/menu.items.bg.color: #$BG_ALT/" \
+         -e "s/^menu.items.text.color:.*/menu.items.text.color: #$FG/" \
+         -e "s/^menu.items.active.bg.color:.*/menu.items.active.bg.color: #$SELECTION/" \
+         "$RUN/labwc.new/themerc-override"
+  rm -rf "$RUN/labwc"; mv "$RUN/labwc.new" "$RUN/labwc"
+
+  # GTK: window buttons, icons, cursor
+  sed -e "s/^gtk-decoration-layout=.*/gtk-decoration-layout=$gtk_layout/" \
+      -e "s/^gtk-icon-theme-name=.*/gtk-icon-theme-name=$ICON_THEME/" \
+      "$SHARE/xdg/gtk-3.0/settings.ini" > "$RUN/xdg/gtk-3.0/settings.ini"
+  printf 'gtk-cursor-theme-name=%s\ngtk-cursor-theme-size=%s\n' "$CURSOR_THEME" "$CURSOR_SIZE" \
+    >> "$RUN/xdg/gtk-3.0/settings.ini"
+
+  # Terminal and launcher colours
+  { sed '/^\[colors\]/,$d' "$SHARE/xdg/foot/foot.ini"
+    echo '[colors]'; echo 'alpha=0.92'; echo "background=$BG"; echo "foreground=$FG"
+    echo "selection-background=$SELECTION"; echo "selection-foreground=ffffff"
+    local i; for i in {0..7}; do echo "regular$i=${PALETTE[$i]}"; echo "bright$i=${PALETTE[$((i+8))]}"; done
+    sed -n '/^\[key-bindings\]/,$p' "$SHARE/xdg/foot/foot.ini"; } > "$RUN/xdg/foot/foot.ini"
+  sed -e "s/^icon-theme=.*/icon-theme=$ICON_THEME/" -e "s/^background=.*/background=${BG}e6/" \
+      -e "s/^text=.*/text=${FG}ff/" -e "s/^match=.*/match=${ACCENT}ff/" \
+      -e "s/^selection=.*/selection=${SELECTION}cc/" \
+      "$SHARE/xdg/fuzzel/fuzzel.ini" > "$RUN/xdg/fuzzel/fuzzel.ini"
+
+  # Top bar + dock
+  sed -e "s|@LOGO@|$SHARE/lgtm-logo.svg|g" \
+      -e "s|@ICON_APPS@|$(icon view-app-grid-symbolic applications-all preferences-desktop-apps applications-other)|" \
+      -e "s|@ICON_SEARCH@|$(icon system-search search)|" \
+      -e "s|@ICON_AI@|$(icon claude-desktop chatgpt utilities-terminal terminal)|" \
+      -e "s|@ICON_FILES@|$(icon org.xfce.thunar thunar system-file-manager file-manager)|" \
+      -e "s|@ICON_WEB@|$(icon firefox web-browser)|" \
+      -e "s|@ICON_TERM@|$(icon foot utilities-terminal terminal)|" \
+      -e "s|@ICON_TEAMS@|$(icon teams-for-linux teams msteams)|" \
+      -e "s|@ICON_ANDROID@|$(icon waydroid android)|" \
+      "$SHARE/waybar/config.jsonc.in" > "$RUN/waybar.jsonc"
+  local bar=$BAR_GLASS dock=$DOCK_GLASS
+  [[ $MODE == lite ]] && { bar=$BAR_LITE; dock=$DOCK_LITE; }
+  cat > "$RUN/theme.css" <<EOF
+/* Generated by lgtm-session from $TDIR/theme.conf */
+@define-color fg #$FG;
+@define-color fg_dim #$FG_DIM;
+@define-color accent #$ACCENT;
+@define-color red #$RED;
+@define-color bar_bg $bar;
+@define-color dock_bg $dock;
+@define-color border $BORDER;
+@define-color hairline $HAIRLINE;
+@define-color tooltip_bg $TOOLTIP;
+EOF
+  { echo "@import url(\"file://$RUN/theme.css\");"
+    echo "@import url(\"file://$SHARE/waybar/style.css\");"
+    [[ $MODE == lite ]] && echo "@import url(\"file://$SHARE/waybar/lite.css\");"
+    true; } > "$RUN/waybar.css"
+}
+
+export LGTM_MODE=$MODE LGTM_RUN=$RUN LGTM_KEYS=$KEYS LGTM_THEME=$THEME LGTM_LITE_BG=$LITE_BG
+export XCURSOR_THEME=$CURSOR_THEME XCURSOR_SIZE=$CURSOR_SIZE
+configure
+
+if (( APPLY )); then
+  # Reload what's running: bar style, background, labwc theme. New windows get the rest.
+  pkill -x -SIGUSR2 waybar 2>/dev/null || true
+  if pgrep -x swaybg >/dev/null; then
+    pkill -x swaybg || true
+    if [[ $MODE == glass ]]; then setsid -f swaybg -m fill -i "$WALLPAPER" >/dev/null 2>&1
+    else setsid -f swaybg -c "$LITE_BG" >/dev/null 2>&1; fi
+  fi
+  [[ $MODE == lite ]] && { labwc --reconfigure 2>/dev/null || true; }
+  exit 0
+fi
+
+# Keep AI agents' LGTM OS skills linked (cheap: a few symlinks).
+lgtm-agent --link-skills >/dev/null 2>&1 || true
+export XDG_SESSION_TYPE=wayland XDG_SESSION_DESKTOP=lgtm
+export QT_QPA_PLATFORM="wayland;xcb" ELECTRON_OZONE_PLATFORM_HINT=auto MOZ_ENABLE_WAYLAND=1
+export GTK_THEME=${GTK_THEME:-Adwaita:dark}
+# LGTM OS defaults (fuzzel, foot, GTK, default apps) come before /etc/xdg; anything
+# in ~/.config still wins over both.
+export XDG_CONFIG_DIRS=$RUN/xdg:$SHARE/xdg:${XDG_CONFIG_DIRS:-/etc/xdg}
+# Flatpak apps in the menu, and commands exported from .deb/.rpm containers on PATH.
+export XDG_DATA_DIRS=$HOME/.local/share/flatpak/exports/share:/var/lib/flatpak/exports/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}
+case :$PATH: in *:$HOME/.local/bin:*) ;; *) export PATH=$HOME/.local/bin:$PATH ;; esac
 
 if [[ $MODE == glass ]]; then
   export XDG_CURRENT_DESKTOP=lgtm:wayfire
-  cfg=$HOME/.config/wayfire.ini; [[ -r $cfg ]] || cfg=$SHARE/wayfire.ini
+  cfg=$HOME/.config/wayfire.ini; [[ -r $cfg ]] || cfg=$RUN/wayfire.ini
   exec wayfire -c "$cfg"
 else
   export XDG_CURRENT_DESKTOP=lgtm:labwc:wlroots
-  cfg=$HOME/.config/labwc; [[ -r $cfg/rc.xml ]] || cfg=$SHARE/labwc
+  cfg=$HOME/.config/labwc; [[ -r $cfg/rc.xml ]] || cfg=$RUN/labwc
   exec labwc -C "$cfg"
 fi

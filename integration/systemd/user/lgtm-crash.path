@@ -1,0 +1,9 @@
+[Unit]
+Description=Notice program crashes (inotify watch, no running process)
+
+[Path]
+PathChanged=/var/lib/systemd/coredump
+Unit=lgtm-crash.service
+
+[Install]
+WantedBy=default.target

@@ -31,12 +31,13 @@
     "margin-bottom": 10,
     "exclusive": true,
     "modules-center": [
-      "image#apps", "image#search", "image#files", "image#web", "image#term",
+      "image#apps", "image#search", "image#ai", "image#files", "image#web", "image#term",
       "image#teams", "image#android", "wlr/taskbar#dock"
     ],
 
     "image#apps":    { "path": "@ICON_APPS@",    "size": 40, "on-click": "fuzzel" },
     "image#search":  { "path": "@ICON_SEARCH@",  "size": 40, "on-click": "fuzzel" },
+    "image#ai":      { "path": "@ICON_AI@",      "size": 40, "on-click": "lgtm-agent", "on-click-right": "lgtm-agent --pick" },
     "image#files":   { "path": "@ICON_FILES@",   "size": 40, "on-click": "thunar" },
     "image#web":     { "path": "@ICON_WEB@",     "size": 40, "on-click": "firefox" },
     "image#term":    { "path": "@ICON_TERM@",    "size": 40, "on-click": "foot" },

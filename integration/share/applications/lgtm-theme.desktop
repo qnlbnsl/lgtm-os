@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Theme
+Comment=Change the LGTM OS look: Aurora or macOS Graphite
+Exec=lgtm-theme --pick
+Icon=preferences-desktop-theme
+Categories=Settings;DesktopSettings;
+Keywords=theme;appearance;dark;macos;graphite;wallpaper;

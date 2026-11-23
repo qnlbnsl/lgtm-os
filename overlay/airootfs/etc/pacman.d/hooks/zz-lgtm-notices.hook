@@ -1,0 +1,13 @@
+# Keep /usr/share/lgtm/NOTICES.md (open source notices) in sync with what's installed.
+# Runs while the ISO is built and after every package change on installed systems.
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Operation = Remove
+Type = Package
+Target = *
+
+[Action]
+Description = Updating open source notices...
+When = PostTransaction
+Exec = /bin/sh -c '[ -x /usr/bin/lgtm-notices ] && /usr/bin/lgtm-notices || true'
