@@ -1,0 +1,49 @@
+// LGTM OS: Mac-style top bar + floating dock, both from one waybar process.
+// @PLACEHOLDERS@ are filled in by lgtm-session at login.
+[
+  {
+    "name": "top",
+    "layer": "top",
+    "position": "top",
+    "height": 28,
+    "spacing": 14,
+    "modules-left": ["image#logo", "wlr/taskbar#title"],
+    "modules-right": ["tray", "network", "battery", "clock"],
+
+    "image#logo": { "path": "@LOGO@", "size": 18, "on-click": "lgtm-power", "tooltip": false },
+    // Shows only the focused app's name, like the Mac menu bar.
+    "wlr/taskbar#title": { "format": "{title}", "active-first": true, "all-outputs": false,
+                           "markup": false, "tooltip": false, "on-click": "activate" },
+    "tray": { "icon-size": 16, "spacing": 10 },
+    "network": {
+      "format-wifi": "Wi-Fi", "format-ethernet": "Wired", "format-disconnected": "Offline",
+      "tooltip-format-wifi": "{essid} ({signalStrength}%)", "on-click": "foot -e impala"
+    },
+    "battery": { "format": "{capacity}%", "states": { "low": 15 } },
+    "clock": { "format": "{:%a %-d %b  %H:%M}", "tooltip": false }
+  },
+  {
+    "name": "dock",
+    "layer": "top",
+    "position": "bottom",
+    "width": 1,
+    "height": 60,
+    "margin-bottom": 10,
+    "exclusive": true,
+    "modules-center": [
+      "image#apps", "image#search", "image#files", "image#web", "image#term",
+      "image#teams", "image#android", "wlr/taskbar#dock"
+    ],
+
+    "image#apps":    { "path": "@ICON_APPS@",    "size": 40, "on-click": "fuzzel" },
+    "image#search":  { "path": "@ICON_SEARCH@",  "size": 40, "on-click": "fuzzel" },
+    "image#files":   { "path": "@ICON_FILES@",   "size": 40, "on-click": "thunar" },
+    "image#web":     { "path": "@ICON_WEB@",     "size": 40, "on-click": "firefox" },
+    "image#term":    { "path": "@ICON_TERM@",    "size": 40, "on-click": "foot" },
+    "image#teams":   { "path": "@ICON_TEAMS@",   "size": 40, "on-click": "teams-for-linux" },
+    "image#android": { "path": "@ICON_ANDROID@", "size": 40, "on-click": "lgtm-android" },
+    // Running apps (Windows, Linux and Android alike) appear after the launchers.
+    "wlr/taskbar#dock": { "format": "{icon}", "icon-size": 40, "tooltip-format": "{title}",
+                          "on-click": "activate", "on-click-middle": "close" }
+  }
+]

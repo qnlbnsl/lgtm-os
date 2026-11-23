@@ -1,0 +1,13 @@
+[Default Applications]
+application/x-ms-dos-executable=lgtm-exe.desktop
+application/x-msdownload=lgtm-exe.desktop
+application/x-msi=lgtm-exe.desktop
+application/x-ms-shortcut=lgtm-exe.desktop
+application/vnd.microsoft.portable-executable=lgtm-exe.desktop
+application/x-bat=lgtm-exe.desktop
+application/vnd.android.package-archive=lgtm-apk.desktop
+inode/directory=thunar.desktop
+x-scheme-handler/http=firefox.desktop
+x-scheme-handler/https=firefox.desktop
+text/html=firefox.desktop
+x-scheme-handler/msteams=teams-for-linux.desktop

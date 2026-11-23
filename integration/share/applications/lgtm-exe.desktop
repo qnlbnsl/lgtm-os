@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Windows Program
+Comment=Run Windows programs and installers
+Exec=lgtm-exe %f
+Icon=wine
+NoDisplay=true
+Terminal=false
+MimeType=application/x-ms-dos-executable;application/x-msdownload;application/x-msi;application/x-ms-shortcut;application/vnd.microsoft.portable-executable;application/x-bat;application/x-ms-ne-executable;

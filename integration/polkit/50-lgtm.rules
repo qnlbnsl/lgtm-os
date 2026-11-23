@@ -1,0 +1,11 @@
+// Let local desktop users start and stop Android without a password prompt.
+polkit.addRule(function (action, subject) {
+  if (action.id == "org.freedesktop.systemd1.manage-units" &&
+      subject.local && subject.active && subject.isInGroup("wheel")) {
+    var unit = action.lookup("unit"), verb = action.lookup("verb");
+    if ((unit == "waydroid-container.service" || unit == "lgtm-android-init.service") &&
+        (verb == "start" || verb == "stop" || verb == "restart")) {
+      return polkit.Result.YES;
+    }
+  }
+});

@@ -1,0 +1,11 @@
+[Unit]
+Description=Update GE-Proton for Windows apps
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/lgtm-proton-update
+# Background job: never compete with what you're doing.
+Nice=19
+IOSchedulingClass=idle
+CPUSchedulingPolicy=idle

@@ -1,0 +1,80 @@
+# --- boot (live ISO + installed) ---
+base
+linux-zen
+linux-firmware
+amd-ucode
+intel-ucode
+mkinitcpio
+mkinitcpio-archiso
+syslinux
+grub
+efibootmgr
+edk2-shell
+memtest86+
+memtest86+-efi
+sudo
+# --- installer ---
+arch-install-scripts
+gptfdisk
+dosfstools
+e2fsprogs
+squashfs-tools
+# --- network (iwd + networkd, no NetworkManager) ---
+iwd
+impala
+# --- desktop: greetd -> lgtm-session -> wayfire (glass) | labwc (lite) ---
+greetd
+greetd-tuigreet
+labwc
+wayfire
+waybar
+swaybg
+fuzzel
+foot
+mako
+libnotify
+thunar
+xorg-xwayland
+xdg-desktop-portal-wlr
+xdg-utils
+papirus-icon-theme
+inter-font
+noto-fonts
+adwaita-icon-theme
+firefox
+brightnessctl
+wlr-randr
+# --- audio (socket-activated: costs nothing until used) ---
+pipewire
+pipewire-pulse
+wireplumber
+# --- graphics ---
+mesa
+lib32-mesa
+vulkan-icd-loader
+lib32-vulkan-icd-loader
+vulkan-radeon
+lib32-vulkan-radeon
+vulkan-intel
+lib32-vulkan-intel
+vulkan-swrast
+# --- Windows: Wine + Proton via umu ---
+wine
+wine-mono
+wine-gecko
+winetricks
+umu-launcher
+lib32-libpulse
+lib32-alsa-plugins
+lib32-gnutls
+icoutils
+python
+# --- Android ---
+waydroid
+# --- memory ---
+earlyoom
+zram-generator
+# --- LGTM OS (local repo, built by build.sh) ---
+lgtm-integration
+lgtm-ge-proton
+teams-for-linux-bin

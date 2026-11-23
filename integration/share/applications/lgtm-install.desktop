@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Install LGTM OS
+Exec=foot -e lgtm-install
+Icon=system-software-install
+Categories=System;

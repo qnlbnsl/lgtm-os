@@ -1,0 +1,10 @@
+[Unit]
+Description=Download and set up Android (Waydroid), once
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=!/var/lib/waydroid/waydroid.cfg
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/waydroid init
+TimeoutStartSec=infinity

@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+# lgtm-exe: run a Windows program (.exe .msi .bat .cmd .lnk) like a native app.
+#
+#   lgtm-exe [--prefix NAME] [--runner proton|wine] FILE [ARGS...]
+#
+# Called by double-click (MIME handler), by the kernel (binfmt_misc: ./setup.exe),
+# and by the menu entries that lgtm-menu-sync writes.
+#
+# Prefixes live in ~/.local/share/lgtm/windows/<name>. By default every app
+# shares one prefix per runner: one prefix means one setup, and less disk and time.
+# A program inside a prefix always runs in that prefix.
+set -euo pipefail
+
+CONF=${XDG_CONFIG_HOME:-$HOME/.config}/lgtm/windows.conf
+BASE=${XDG_DATA_HOME:-$HOME/.local/share}/lgtm/windows
+LOGDIR=${XDG_CACHE_HOME:-$HOME/.cache}/lgtm/logs
+BUNDLED_PROTON=/usr/share/lgtm/proton
+
+RUNNER=proton           # proton = umu-launcher + GE-Proton (best compatibility)
+                        # wine   = system Wine (starts faster, works offline)
+# shellcheck disable=SC1090
+[[ -r $CONF ]] && . "$CONF"
+
+prefix_name="" runner_arg=""
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --prefix) prefix_name=$2; shift 2 ;;
+    --runner) runner_arg=$2; shift 2 ;;
+    -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
+    --) shift; break ;;
+    *) break ;;
+  esac
+done
+[[ $# -ge 1 ]] || { echo "usage: lgtm-exe [--prefix NAME] [--runner proton|wine] FILE [ARGS...]" >&2; exit 2; }
+
+target=$(realpath -- "$1"); shift
+[[ -e $target ]] || { echo "lgtm-exe: no such file: $target" >&2; exit 1; }
+
+notify() { command -v notify-send >/dev/null && notify-send -a "LGTM OS" -i wine "$@" 2>/dev/null || true; }
+
+# A program inside a prefix runs in that prefix.
+if [[ -z $prefix_name && $target == "$BASE"/*/* ]]; then
+  rel=${target#"$BASE"/}; prefix_name=${rel%%/*}
+fi
+
+runner=${runner_arg:-$RUNNER}
+prefix_name=${prefix_name:-$runner}
+prefix=$BASE/$prefix_name
+# A prefix remembers its runner: Proton and Wine prefixes don't mix.
+if [[ -r $prefix/.lgtm-runner && -z $runner_arg ]]; then
+  runner=$(<"$prefix/.lgtm-runner")
+fi
+
+# Offline and no Proton runtime yet: use Wine instead of failing.
+if [[ $runner == proton ]] && ! command -v umu-run >/dev/null; then runner=wine; fi
+if [[ $runner == proton && ! -d $HOME/.local/share/umu/steamrt3 ]] \
+   && ! getent ahosts repo.steampowered.com >/dev/null 2>&1; then
+  notify "Windows app" "Offline: using Wine. Proton is set up the next time you are online."
+  runner=wine; [[ $prefix_name == proton ]] && prefix_name=wine && prefix=$BASE/wine
+fi
+
+first_run=0
+if [[ ! -d $prefix ]]; then
+  first_run=1
+  mkdir -p "$prefix"
+  echo "$runner" > "$prefix/.lgtm-runner"
+  notify "Setting up Windows support" "One-time setup for '$prefix_name'. This can take a minute."
+fi
+
+mkdir -p "$LOGDIR"
+name=$(basename -- "$target"); log=$LOGDIR/${name%.*}.log
+
+# How each file type is started.
+ext=${name##*.}; ext=${ext,,}
+case $ext in
+  msi)      cmd=(msiexec /i "$target") ;;
+  lnk|bat|cmd) cmd=(start /wait /unix "$target") ;;
+  *)        cmd=("$target") ;;
+esac
+
+# Many programs expect to start in their own folder.
+cd -- "$(dirname -- "$target")"
+
+export WINEPREFIX=$prefix
+export WINEDEBUG=${WINEDEBUG:--all}     # logging off: faster
+export WINEDLLOVERRIDES=${WINEDLLOVERRIDES:-winemenubuilder.exe=d}  # menus are handled by lgtm-menu-sync
+
+status=0
+if [[ $runner == proton ]]; then
+  export GAMEID=${GAMEID:-umu-default} STORE=${STORE:-none}
+  if [[ -z ${PROTONPATH:-} ]]; then
+    # Newest first: weekly-updated copy, then the one bundled in the ISO,
+    # then let umu download GE-Proton itself.
+    updated=${XDG_DATA_HOME:-$HOME/.local/share}/lgtm/proton/current
+    if   [[ -x $updated/proton ]];        then export PROTONPATH=$updated
+    elif [[ -d $BUNDLED_PROTON ]];        then export PROTONPATH=$BUNDLED_PROTON
+    else export PROTONPATH=GE-Proton; fi
+  fi
+  # After the runtime is downloaded, skip the update check on each launch.
+  [[ -d $HOME/.local/share/umu/steamrt3 ]] && export UMU_RUNTIME_UPDATE=${UMU_RUNTIME_UPDATE:-0}
+  umu-run "${cmd[@]}" "$@" >"$log" 2>&1 || status=$?
+else
+  wine "${cmd[@]}" "$@" >"$log" 2>&1 || status=$?
+  # Installers often start child processes and exit early; wait for the prefix to go idle.
+  wineserver -w 2>/dev/null || true
+fi
+
+# Add (or remove) menu entries for whatever was installed or uninstalled.
+lgtm-menu-sync --prefix "$prefix" >/dev/null 2>&1 || true
+# A second pass catches installers that finish in the background.
+( sleep 30; lgtm-menu-sync --prefix "$prefix" ) >/dev/null 2>&1 &
+disown || true
+
+if [[ $status -ne 0 && $first_run -eq 0 ]]; then
+  notify "$name stopped" "Exit code $status. Log: $log"
+fi
+exit "$status"

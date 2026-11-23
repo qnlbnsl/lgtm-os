@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# lgtm-mac: Mac programs through Darling. PREVIEW, off by default.
+#
+#   lgtm-mac enable          install Darling (from the ISO's local repo, offline)
+#   lgtm-mac run PATH [ARGS] run a Mac command-line program or .app bundle
+#   lgtm-mac shell           open a macOS-like shell
+#
+# Darling runs most command-line Mac programs. Graphical Mac apps mostly do not
+# work yet.
+set -euo pipefail
+
+need_darling() {
+  command -v darling >/dev/null || { echo "Darling is not installed. Run: lgtm-mac enable" >&2; exit 1; }
+}
+
+case ${1:-} in
+  enable)
+    sudo pacman -S --needed darling-bin
+    echo "Darling installed. Try: lgtm-mac shell" ;;
+  run)
+    need_darling
+    p=$(realpath -- "$2"); shift 2
+    if [[ -d $p && $p == *.app ]]; then
+      bin=$(/usr/bin/find "$p/Contents/MacOS" -maxdepth 1 -type f -perm -u+x | head -n1)
+      [[ -n $bin ]] || { echo "No program found in $p" >&2; exit 1; }
+      p=$bin
+    fi
+    exec darling "$p" "$@" ;;
+  shell) need_darling; exec darling shell ;;
+  *) sed -n '2,10p' "$0"; exit 2 ;;
+esac

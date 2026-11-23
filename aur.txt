@@ -1,0 +1,4 @@
+# AUR packages built into the local repo by build.sh. Prebuilt -bin packages only.
+# install = goes into the ISO; repo = available offline but not installed.
+teams-for-linux-bin install
+darling-bin         repo

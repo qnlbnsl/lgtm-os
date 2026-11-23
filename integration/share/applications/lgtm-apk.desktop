@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Android App Installer
+Exec=lgtm-android install %f
+Icon=android
+NoDisplay=true
+Terminal=false
+MimeType=application/vnd.android.package-archive;

@@ -1,0 +1,12 @@
+[Unit]
+Description=Weekly GE-Proton update
+
+[Timer]
+OnCalendar=weekly
+# Catch up after the machine was off; wait a bit after login so boot stays fast.
+Persistent=true
+OnStartupSec=10min
+RandomizedDelaySec=1h
+
+[Install]
+WantedBy=timers.target

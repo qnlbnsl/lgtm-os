@@ -1,0 +1,12 @@
+#!/bin/sh
+# Live ISO only: create the 'live' user and log it straight into the desktop.
+set -e
+id live >/dev/null 2>&1 || useradd -m -G wheel,video,input -s /bin/bash live
+passwd -d live >/dev/null
+echo 'live ALL=(ALL:ALL) NOPASSWD: ALL' > /etc/sudoers.d/00-live
+chmod 440 /etc/sudoers.d/00-live
+cat >> /etc/greetd/config.toml <<'CONF'
+[initial_session]
+command = "lgtm-session"
+user = "live"
+CONF

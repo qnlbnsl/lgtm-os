@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# lgtm-android: Android apps through Waydroid, started only when needed.
+#
+#   lgtm-android                 open the full Android screen
+#   lgtm-android launch PKG      start one Android app
+#   lgtm-android install FILE    install an .apk (the double-click handler)
+#   lgtm-android stop            stop Android and free its RAM
+#
+# Nothing Android-related runs at boot. The container starts on first use, so
+# idle RAM is unaffected.
+set -euo pipefail
+
+notify() { command -v notify-send >/dev/null && notify-send -a "LGTM OS" -i android "$@" 2>/dev/null || true; }
+
+session_running() { waydroid status 2>/dev/null | grep -Eq 'Session:[[:space:]]*RUNNING'; }
+
+ensure_ready() {
+  if [[ ! -e /var/lib/waydroid/waydroid.cfg ]]; then
+    local mem; mem=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo)
+    (( mem < 2048 )) && notify "Low memory" "Android needs about 2 GB of RAM; this machine has ${mem} MB."
+    notify "Setting up Android" "Downloading Android (about 1 GB). This happens once."
+    systemctl start lgtm-android-init.service \
+      || { notify "Android setup failed" "Check your internet connection: journalctl -u lgtm-android-init"; exit 1; }
+  fi
+  systemctl start waydroid-container.service
+  if ! session_running; then
+    (setsid waydroid session start >/dev/null 2>&1 &)
+    for _ in $(seq 1 120); do session_running && break; sleep 0.5; done
+    session_running || { notify "Android did not start" "Try: waydroid log"; exit 1; }
+    fix_menu_entries &
+  fi
+}
+
+# Waydroid writes menu entries that assume Android is already running. Point them
+# at this script so they start Android first.
+fix_menu_entries() {
+  sleep 5
+  local f
+  for f in "${XDG_DATA_HOME:-$HOME/.local/share}"/applications/waydroid.*.desktop; do
+    [[ -e $f ]] || continue
+    sed -i -E 's|^Exec=waydroid app launch (.*)$|Exec=lgtm-android launch \1|' "$f"
+  done
+}
+
+case ${1:-show} in
+  show)    ensure_ready; exec waydroid show-full-ui ;;
+  launch)  ensure_ready; exec waydroid app launch "$2" ;;
+  install)
+    apk=$(realpath -- "$2"); ensure_ready
+    if waydroid app install "$apk"; then
+      notify "Installed" "$(basename -- "$apk") is now in your app menu."
+      fix_menu_entries
+    else
+      notify "Install failed" "$(basename -- "$apk")"; exit 1
+    fi ;;
+  stop)
+    waydroid session stop 2>/dev/null || true
+    systemctl stop waydroid-container.service 2>/dev/null || true
+    notify "Android stopped" "Its memory has been freed." ;;
+  *) sed -n '2,10p' "$0"; exit 2 ;;
+esac

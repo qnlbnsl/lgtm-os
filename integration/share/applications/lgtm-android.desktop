@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Android
+Comment=Open the Android screen
+Exec=lgtm-android
+Icon=waydroid
+Categories=System;

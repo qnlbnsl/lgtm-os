@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# lgtm-mem: show how much RAM the system itself uses, and the biggest users.
+# The target is under 128 MB used at an idle desktop.
+set -euo pipefail
+awk '
+  /^MemTotal:/     {t=$2}
+  /^MemAvailable:/ {a=$2}
+  /^Shmem:/        {s=$2}
+  /^SwapTotal:/    {st=$2}
+  /^SwapFree:/     {sf=$2}
+  END {
+    used=(t-a)/1024
+    printf "RAM total:   %6.1f MB\n", t/1024
+    printf "RAM used:    %6.1f MB   (target <= 128 MB)  %s\n", used, (used<=128 ? "OK" : "OVER")
+    printf "  of which tmpfs/shm: %.1f MB\n", s/1024
+    printf "zram swap used: %.1f MB\n", (st-sf)/1024
+  }' /proc/meminfo
+echo
+echo "Top processes by RSS (MB):"
+ps -eo rss=,comm= --sort=-rss | head -n 15 | awk '{printf "  %7.1f  %s\n", $1/1024, $2}'

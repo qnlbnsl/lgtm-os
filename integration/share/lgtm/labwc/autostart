@@ -1,0 +1,6 @@
+# LGTM OS lite mode. Kept to the minimum: one bar process, solid-colour background.
+dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE LGTM_MODE
+# swaybg -c uses a single-pixel buffer: a background colour that costs ~0 RAM.
+swaybg -c '#1d2b3a' >/dev/null 2>&1 &
+waybar -c "$LGTM_RUN/waybar.jsonc" -s "$LGTM_RUN/waybar.css" >/dev/null 2>&1 &
+lgtm-menu-sync >/dev/null 2>&1 &

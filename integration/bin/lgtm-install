@@ -1,0 +1,144 @@
+#!/usr/bin/env bash
+# lgtm-install: install LGTM OS from the live ISO onto a disk.
+#
+# Copies the live system image straight to disk (offline, no downloads), then
+# configures the bootloader, user and login. Erases the whole selected disk.
+set -euo pipefail
+
+[[ $EUID -eq 0 ]] || exec sudo -- "$0" "$@"
+
+BOOTMNT=/run/archiso/bootmnt
+SFS=$(ls "$BOOTMNT"/arch/x86_64/airootfs.sfs 2>/dev/null || true)
+KERNEL=$BOOTMNT/arch/boot/x86_64/vmlinuz-linux-zen
+MNT=/mnt/lgtm
+
+die()  { echo "error: $*" >&2; exit 1; }
+ask()  { local p=$1 d=${2:-}; read -rp "$p${d:+ [$d]}: " REPLY; REPLY=${REPLY:-$d}; }
+part() { [[ $1 =~ [0-9]$ ]] && echo "${1}p$2" || echo "${1}$2"; }
+
+[[ -n $SFS && -r $SFS ]] || die "run this from the LGTM OS live ISO (no system image found)"
+
+cat <<'EOF'
+
+  LGTM OS installer
+  -----------------
+  This erases one whole disk and installs LGTM OS on it.
+
+EOF
+
+# --- disk ---------------------------------------------------------------------
+boot_dev=$(findmnt -no SOURCE "$BOOTMNT" 2>/dev/null | sed -E 's/p?[0-9]+$//' || true)
+mapfile -t disks < <(lsblk -dnpo NAME,TYPE | awk '$2=="disk"{print $1}' | grep -v -- "^${boot_dev:-none}$" || true)
+(( ${#disks[@]} )) || die "no disks found"
+for i in "${!disks[@]}"; do
+  printf '  %d) %s\n' $((i+1)) "$(lsblk -dno NAME,SIZE,MODEL "${disks[$i]}" | sed 's/  */ /g')"
+done
+ask "Install to disk number" 1
+disk=${disks[$((REPLY-1))]:-} ; [[ -b $disk ]] || die "invalid choice"
+
+# --- user ---------------------------------------------------------------------
+ask "Your name for login (lowercase)" user
+username=$REPLY
+[[ $username =~ ^[a-z_][a-z0-9_-]*$ ]] || die "invalid username"
+while :; do
+  read -rsp "Password: " pw1; echo
+  read -rsp "Password again: " pw2; echo
+  [[ -n $pw1 && $pw1 == "$pw2" ]] && break
+  echo "Passwords are empty or don't match, try again."
+done
+ask "Computer name" lgtm; hostname=$REPLY
+ask "Time zone (e.g. Europe/Berlin)" UTC; tz=$REPLY
+[[ -e /usr/share/zoneinfo/$tz ]] || die "unknown time zone: $tz"
+ask "Log in automatically at boot? (y/n)" y; autologin=$REPLY
+
+echo
+echo "ALL DATA on $disk will be erased."
+ask "Type ERASE to continue"
+[[ $REPLY == ERASE ]] || die "cancelled"
+
+# --- partition and format -----------------------------------------------------
+uefi=0; [[ -d /sys/firmware/efi ]] && uefi=1
+echo ">> partitioning $disk ($([[ $uefi == 1 ]] && echo UEFI || echo BIOS))"
+umount -R "$MNT" 2>/dev/null || true
+wipefs -af "$disk" >/dev/null
+sgdisk --zap-all "$disk" >/dev/null
+if (( uefi )); then
+  sgdisk -n1:0:+512M -t1:ef00 -c1:EFI -n2:0:0 -t2:8304 -c2:lgtm "$disk" >/dev/null
+else
+  sgdisk -n1:0:+1M -t1:ef02 -c1:bios -n2:0:0 -t2:8304 -c2:lgtm "$disk" >/dev/null
+fi
+partprobe "$disk" 2>/dev/null || true; udevadm settle
+p1=$(part "$disk" 1); p2=$(part "$disk" 2)
+
+mkfs.ext4 -qF -L lgtm "$p2"
+mkdir -p "$MNT"; mount -o noatime "$p2" "$MNT"
+if (( uefi )); then
+  mkfs.fat -F32 -n EFI "$p1" >/dev/null
+  mkdir -p "$MNT/boot"; mount "$p1" "$MNT/boot"
+fi
+
+# --- copy the system ------------------------------------------------------------
+echo ">> copying system (this is the long step)"
+unsquashfs -f -q -d "$MNT" "$SFS" >/dev/null || unsquashfs -f -d "$MNT" "$SFS"
+[[ -e $MNT/boot/vmlinuz-linux-zen ]] || cp "$KERNEL" "$MNT/boot/vmlinuz-linux-zen"
+genfstab -U "$MNT" > "$MNT/etc/fstab"
+
+# --- configure inside the new system ------------------------------------------
+echo ">> configuring"
+arch-chroot "$MNT" /bin/bash -e <<CHROOT
+# Remove the live-ISO-only bits.
+rm -f /etc/mkinitcpio.conf.d/archiso.conf /etc/systemd/system/multi-user.target.wants/lgtm-live.service
+rm -f /etc/systemd/system/lgtm-live.service /usr/local/lib/lgtm-live-setup /etc/sudoers.d/00-live
+pacman -Rdd --noconfirm mkinitcpio-archiso >/dev/null 2>&1 || true
+cat > /etc/mkinitcpio.d/linux-zen.preset <<'EOF'
+ALL_kver="/boot/vmlinuz-linux-zen"
+PRESETS=('default')
+default_image="/boot/initramfs-linux-zen.img"
+EOF
+echo 'KEYMAP=us' > /etc/vconsole.conf
+mkinitcpio -P >/dev/null
+
+echo '$hostname' > /etc/hostname
+ln -sf '/usr/share/zoneinfo/$tz' /etc/localtime
+hwclock --systohc 2>/dev/null || true
+sed -i 's/^#en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen
+locale-gen >/dev/null
+echo 'LANG=en_US.UTF-8' > /etc/locale.conf
+
+pacman-key --init >/dev/null 2>&1 && pacman-key --populate archlinux >/dev/null 2>&1 || true
+
+useradd -m -G wheel,video,input -s /bin/bash '$username'
+echo '%wheel ALL=(ALL:ALL) ALL' > /etc/sudoers.d/10-wheel
+chmod 440 /etc/sudoers.d/10-wheel
+passwd -l root >/dev/null
+
+if [[ '${autologin,,}' == y* ]]; then
+  cat > /etc/greetd/config.toml <<'EOF'
+[terminal]
+vt = 1
+[default_session]
+command = "tuigreet --time --remember --asterisks --cmd lgtm-session"
+user = "greeter"
+[initial_session]
+command = "lgtm-session"
+user = "$username"
+EOF
+fi
+
+sed -i -E 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=0/; s/^GRUB_TIMEOUT_STYLE=.*/GRUB_TIMEOUT_STYLE=hidden/' /etc/default/grub
+sed -i -E 's|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT="quiet loglevel=3 zswap.enabled=0 nowatchdog"|' /etc/default/grub
+sed -i -E 's/^GRUB_DISTRIBUTOR=.*/GRUB_DISTRIBUTOR="LGTM OS"/' /etc/default/grub
+if [[ $uefi == 1 ]]; then
+  grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=LGTM >/dev/null
+  grub-install --target=x86_64-efi --efi-directory=/boot --removable >/dev/null
+else
+  grub-install --target=i386-pc '$disk' >/dev/null
+fi
+grub-mkconfig -o /boot/grub/grub.cfg >/dev/null 2>&1
+CHROOT
+echo "$username:$pw1" | arch-chroot "$MNT" chpasswd
+
+sync
+umount -R "$MNT"
+echo
+echo "Done. Remove the install media and reboot."

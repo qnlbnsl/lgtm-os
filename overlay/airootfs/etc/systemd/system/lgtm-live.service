@@ -1,0 +1,11 @@
+[Unit]
+Description=LGTM OS live session user
+ConditionKernelCommandLine=archisobasedir
+Before=greetd.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/lgtm-live-setup
+
+[Install]
+WantedBy=multi-user.target

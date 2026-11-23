@@ -1,0 +1,33 @@
+# GE-Proton bundled so Windows apps work offline on first boot.
+# build.sh sets LGTM_GEP_TAG (e.g. GE-Proton11-13) and LGTM_GEP_ASSET, the
+# release file's base name: "GE-Proton11-13-x86_64" on new releases,
+# "GE-Proton10-25" on old ones.
+_tag=${LGTM_GEP_TAG:-GE-Proton11-13}
+_asset=${LGTM_GEP_ASSET:-$_tag-x86_64}
+pkgname=lgtm-ge-proton
+pkgver=${_tag#GE-Proton}; pkgver=${pkgver//-/.}
+pkgrel=1
+pkgdesc="GE-Proton (Wine + DXVK + VKD3D) for LGTM OS"
+arch=('x86_64')
+url="https://github.com/GloriousEggroll/proton-ge-custom"
+license=('BSD-3-Clause' 'custom')
+options=(!strip !debug)
+_base=$url/releases/download/$_tag
+source=("$_base/$_asset.tar.gz" "$_base/$_asset.sha512sum")
+sha512sums=('SKIP' 'SKIP')
+noextract=("$_asset.tar.gz")
+
+prepare() {
+  # Verify against upstream's published checksum.
+  sha512sum -c "$_asset.sha512sum"
+}
+
+package() {
+  local d="$pkgdir/usr/share/steam/compatibilitytools.d"
+  install -d "$d" "$pkgdir/usr/share/lgtm"
+  bsdtar -xf "$srcdir/$_asset.tar.gz" -C "$d"
+  local top; top=$(bsdtar -tf "$srcdir/$_asset.tar.gz" | head -n1); top=${top%%/*}
+  ln -s "../steam/compatibilitytools.d/$top" "$pkgdir/usr/share/lgtm/proton"
+  [[ -f $d/$top/LICENSE ]] && install -Dm644 "$d/$top/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  return 0
+}

@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# lgtm-power: the menu behind the LGTM OS logo (top-left).
+set -euo pipefail
+CONF=${XDG_CONFIG_HOME:-$HOME/.config}/lgtm/session.conf
+cur=${LGTM_MODE:-lite}
+other=$([[ $cur == glass ]] && echo lite || echo glass)
+
+choice=$(printf '%s\n' \
+  "Stop Android (free memory)" \
+  "Switch to ${other^} mode (next login)" \
+  "Log out" "Restart" "Shut down" \
+  | fuzzel --dmenu --prompt "LGTM OS  " --lines 5) || exit 0
+
+case $choice in
+  Stop\ Android*) lgtm-android stop ;;
+  Switch*) mkdir -p "$(dirname "$CONF")"; echo "MODE=$other" > "$CONF"
+           notify-send -a "LGTM OS" "Mode set to ${other^}" "Log out and back in to apply." ;;
+  "Log out")  loginctl terminate-session "${XDG_SESSION_ID:-self}" ;;
+  "Restart")  systemctl reboot ;;
+  "Shut down") systemctl poweroff ;;
+esac

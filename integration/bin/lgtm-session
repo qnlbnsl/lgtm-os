@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# lgtm-session: start the LGTM OS desktop.
+#
+# Picks one of two modes; both have the same Mac-style top bar and floating dock:
+#   glass  Wayfire + real blur + wallpaper. Needs a GPU and >= 1.5 GB RAM.
+#   lite   labwc, translucent without blur, solid background. Fits in 128 MB.
+#
+# Override in ~/.config/lgtm/session.conf:   MODE=glass | lite | auto
+set -euo pipefail
+
+SHARE=/usr/share/lgtm
+RUN=${XDG_RUNTIME_DIR:-/tmp}/lgtm
+CONF=${XDG_CONFIG_HOME:-$HOME/.config}/lgtm/session.conf
+MODE=auto
+# shellcheck disable=SC1090
+[[ -r $CONF ]] && . "$CONF"
+
+gpu_ok() {
+  local d drv
+  for d in /sys/class/drm/card[0-9]*/device/driver; do
+    [[ -e $d ]] || continue
+    drv=$(basename "$(readlink -f "$d")")
+    case $drv in simpledrm|simple-framebuffer|efifb|vesafb|bochs*|cirrus*|virtio*|vmwgfx|qxl|hyperv*) ;; *) return 0 ;; esac
+  done
+  return 1
+}
+
+if [[ $MODE == auto ]]; then
+  mem=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo)
+  if (( mem >= 1536 )) && gpu_ok && command -v wayfire >/dev/null; then MODE=glass; else MODE=lite; fi
+fi
+
+mkdir -p "$RUN"
+export LGTM_MODE=$MODE LGTM_RUN=$RUN
+export XDG_SESSION_TYPE=wayland XDG_SESSION_DESKTOP=lgtm
+export QT_QPA_PLATFORM="wayland;xcb" ELECTRON_OZONE_PLATFORM_HINT=auto MOZ_ENABLE_WAYLAND=1
+export GTK_THEME=${GTK_THEME:-Adwaita:dark}
+
+# Dock icons: resolve names to files once per login (waybar's image module needs paths).
+icon() {
+  local n t
+  for n in "$@"; do
+    for t in /usr/share/icons/Papirus/64x64/apps /usr/share/icons/Papirus/64x64/places \
+             /usr/share/icons/Papirus/64x64/categories /usr/share/icons/hicolor/scalable/apps \
+             /usr/share/icons/hicolor/256x256/apps /usr/share/icons/hicolor/128x128/apps; do
+      for ext in svg png; do [[ -e $t/$n.$ext ]] && { echo "$t/$n.$ext"; return; }; done
+    done
+  done
+  echo "$SHARE/lgtm-logo.svg"
+}
+sed -e "s|@LOGO@|$SHARE/lgtm-logo.svg|g" \
+    -e "s|@ICON_APPS@|$(icon view-app-grid-symbolic applications-all preferences-desktop-apps applications-other)|" \
+    -e "s|@ICON_SEARCH@|$(icon system-search search)|" \
+    -e "s|@ICON_FILES@|$(icon org.xfce.thunar thunar system-file-manager file-manager)|" \
+    -e "s|@ICON_WEB@|$(icon firefox web-browser)|" \
+    -e "s|@ICON_TERM@|$(icon foot utilities-terminal terminal)|" \
+    -e "s|@ICON_TEAMS@|$(icon teams-for-linux teams msteams)|" \
+    -e "s|@ICON_ANDROID@|$(icon waydroid android)|" \
+    "$SHARE/waybar/config.jsonc.in" > "$RUN/waybar.jsonc"
+{
+  echo "@import url(\"file://$SHARE/waybar/style.css\");"
+  [[ $MODE == lite ]] && echo "@import url(\"file://$SHARE/waybar/lite.css\");"
+} > "$RUN/waybar.css"
+
+if [[ $MODE == glass ]]; then
+  export XDG_CURRENT_DESKTOP=lgtm:wayfire
+  cfg=$HOME/.config/wayfire.ini; [[ -r $cfg ]] || cfg=$SHARE/wayfire.ini
+  exec wayfire -c "$cfg"
+else
+  export XDG_CURRENT_DESKTOP=lgtm:labwc:wlroots
+  cfg=$HOME/.config/labwc; [[ -r $cfg/rc.xml ]] || cfg=$SHARE/labwc
+  exec labwc -C "$cfg"
+fi

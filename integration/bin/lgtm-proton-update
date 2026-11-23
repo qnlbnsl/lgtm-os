@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# lgtm-proton-update: keep GE-Proton current without rebuilding the system.
+#
+# Downloads the newest GE-Proton into ~/.local/share/lgtm/proton/ when online,
+# checks it against GloriousEggroll's published sha512, and points "current" at
+# it. lgtm-exe uses "current" and falls back to the copy bundled in the ISO.
+# Keeps one previous version for rollback. Run weekly by a systemd user timer.
+#
+#   lgtm-proton-update            update if a newer release exists
+#   lgtm-proton-update --status   show installed and latest versions
+set -euo pipefail
+
+API=https://api.github.com/repos/GloriousEggroll/proton-ge-custom/releases/latest
+DIR=${XDG_DATA_HOME:-$HOME/.local/share}/lgtm/proton
+BUNDLED=/usr/share/lgtm/proton
+
+# Prints "TAG ASSET URL SUMURL" for the newest x86_64 build.
+latest() {
+  curl -fsSL --max-time 20 "$API" | python -I -c '
+import json, sys
+r = json.load(sys.stdin)
+assets = {a["name"]: a["browser_download_url"] for a in r["assets"]}
+names = [n[:-7] for n in assets if n.endswith(".tar.gz")]
+pick = [n for n in names if n.endswith("-x86_64")] or [n for n in names if "aarch64" not in n]
+if not pick: sys.exit(1)
+n = pick[0]
+print(r["tag_name"], n, assets[n + ".tar.gz"], assets[n + ".sha512sum"])'
+}
+
+current_name() {
+  if [[ -L $DIR/current ]]; then basename "$(readlink -f "$DIR/current")"
+  elif [[ -e $BUNDLED ]]; then echo "$(basename "$(readlink -f "$BUNDLED")") (bundled)"
+  else echo none; fi
+}
+
+if [[ ${1:-} == --status ]]; then
+  echo "in use: $(current_name)"
+  echo "latest: $(latest | cut -d' ' -f2 || echo 'unknown (offline?)')"
+  exit 0
+fi
+
+read -r tag asset url sumurl < <(latest) || { echo "offline or GitHub unreachable; nothing to do"; exit 0; }
+
+# Already have it (downloaded, or the bundled copy is this version)?
+if [[ -d $DIR/$asset ]] || [[ $(basename "$(readlink -f "$BUNDLED" 2>/dev/null)") == "$asset" ]]; then
+  echo "up to date: $asset"; exit 0
+fi
+
+mkdir -p "$DIR"
+tmp=$(mktemp -d "$DIR/.download.XXXXXX")
+trap 'rm -rf "$tmp"' EXIT
+
+echo "downloading $tag"
+curl -fsSL --retry 3 -o "$tmp/$asset.tar.gz" "$url"
+curl -fsSL --retry 3 -o "$tmp/$asset.sha512sum" "$sumurl"
+(cd "$tmp" && sha512sum -c --quiet "$asset.sha512sum") || { echo "checksum mismatch; discarded" >&2; exit 1; }
+
+mkdir "$tmp/x"
+tar -xzf "$tmp/$asset.tar.gz" -C "$tmp/x"
+top=$(ls "$tmp/x")
+[[ $(wc -l <<<"$top") -eq 1 && -x $tmp/x/$top/proton ]] || { echo "unexpected archive layout; discarded" >&2; exit 1; }
+mv "$tmp/x/$top" "$DIR/$top"
+
+# Switch atomically, keep the previous download, delete anything older.
+prev=$( [[ -L $DIR/current ]] && basename "$(readlink -f "$DIR/current")" || true )
+ln -sfn "$top" "$DIR/.current.new" && mv -T "$DIR/.current.new" "$DIR/current"
+for d in "$DIR"/GE-Proton*; do
+  n=$(basename "$d")
+  [[ $n == "$top" || $n == "$prev" ]] || rm -rf "$d"
+done
+
+echo "now using $top"
+command -v notify-send >/dev/null && notify-send -a "LGTM OS" -i wine "Windows support updated" "Now using $tag." 2>/dev/null || true
