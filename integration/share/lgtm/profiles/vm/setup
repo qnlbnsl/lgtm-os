@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Windows VM profile, run as root after its packages. $LGTM_USER = the desktop user.
+# Virtual machines profile, run as root after its packages. $LGTM_USER = the desktop user.
 set -euo pipefail
-F=/usr/share/lgtm/profiles/windows-vm/files
+F=/usr/share/lgtm/profiles/vm/files
 usermod -aG libvirt,kvm "$LGTM_USER"
 
 # Looking Glass shared memory device.
@@ -33,7 +33,6 @@ if [[ -f /etc/default/grub ]] && ! grep -q 'iommu=pt' /etc/default/grub; then
 fi
 
 echo
-echo "Windows VM tools ready."
+echo "VM tools ready."
 [[ ${reboot_needed:-0} == 1 ]] && echo "Restart the computer first (IOMMU / Looking Glass module), then:"
-echo "  1. Put the Windows 11 ISO in ~/Downloads (microsoft.com/software-download/windows11)"
-echo "  2. Run: lgtm-vm create      (picks the GPU, CPU cores and memory for you)"
+echo "  Run: lgtm-vm      (a wizard: pick an OS, it downloads it and sizes the VM)"

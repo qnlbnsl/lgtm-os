@@ -8,8 +8,9 @@ description: >
   the system is slow or using memory, wants to change login/autologin, networking or
   Wi-Fi, or asks how LGTM OS works. Triggers: waybar, dock, top bar, wayfire, labwc,
   glass mode, lite mode, blur, keybinding, shortcut, wallpaper, theme, graphite, fuzzel,
-  foot, greetd, login, RAM, memory, slow, zram, gaming, steam, setup profile, Windows VM,
-  Looking Glass, GPU passthrough, libvirt, lgtm-session, lgtm-mem, lgtm-setup, lgtm-vm.
+  foot, greetd, login, RAM, memory, slow, zram, gaming, steam, setup profile, VM, virtual
+  machine, Windows VM, Looking Glass, GPU passthrough, SR-IOV, libvirt, container, distrobox,
+  lgtm-pod, lgtm-session, lgtm-mem, lgtm-setup, lgtm-vm.
 ---
 
 # LGTM OS
@@ -103,7 +104,7 @@ edit `theme.conf` (set LABEL; put any wallpaper.png in the folder), then
 lgtm-session generates every app's colours from theme.conf (`$XDG_RUNTIME_DIR/lgtm/`);
 `lgtm-session --apply` reloads them live.
 
-## Setup profiles (gaming, Windows VM, dev)
+## Setup profiles (gaming, VMs, dev)
 `lgtm-setup` lists them, `lgtm-setup NAME` installs one (logo menu: Set up…). Each is
 `/usr/share/lgtm/profiles/<name>/`: `packages` (pacman names; `aur:BASE [pkgs]` lines are
 built from the AUR by `lgtm-pkg`) + an optional root `setup` script. Done markers:
@@ -112,23 +113,44 @@ they run in a terminal at first login.
 - **gaming**: Steam, Heroic, Lutris, GameMode, MangoHud, Gamescope + Vulkan driver per GPU.
   Steam finds the bundled GE-Proton in `/usr/share/steam/compatibilitytools.d`.
 - **dev**: git, gh, node, uv, go, rustup, ripgrep, fd, fzf, podman-docker, ...
-- **windows-vm**: QEMU/libvirt, Looking Glass (AUR, built on setup), kvmfr module, IOMMU
-  kernel options, the `lgtm-tuning` libvirt hook.
+- **vm**: QEMU/libvirt, quickget, Looking Glass B8 (rc, AUR), kvmfr module, IOMMU options,
+  the `lgtm-tuning` libvirt hook.
 
-## Windows VM (Looking Glass)
-For Windows software Wine/Proton can't run (anti-cheat games, some CAD/Office add-ins).
-`lgtm-vm create` builds the VM for this PC (GPU to pass through, whole CPU cores pinned,
-hugepage memory, virtual disk or a whole NVMe drive, virtiofs shares of ~/Documents,
-~/Downloads, ~/Work). `lgtm-vm` starts it and opens Looking Glass fullscreen; Right Ctrl
-captures input. Single monitor only.
-- Definition: `~/.config/lgtm/vm/<name>.xml` (keep it: UUID, MAC and pinned machine type
-  are Windows' activation fingerprint). Edit with `lgtm-vm edit`.
-- Looking Glass config: `/usr/share/lgtm/looking-glass/client.ini`; user overrides in
-  `~/.config/looking-glass/client.ini`. Frame buffer size: `/etc/modprobe.d/kvmfr.conf`.
-- While the VM runs, `/etc/libvirt/hooks/qemu.d/lgtm-tuning` reserves hugepages and keeps
-  host processes/IRQs off its cores. "only N/M hugepages free" = close apps or lower RAM.
-- Black Looking Glass window: Windows needs the GPU driver, the Looking Glass host (B7) and
-  a dummy plug or monitor on the passed-through GPU. Debug with `virsh -c qemu:///system`.
+## Virtual machines (lgtm-vm)
+`lgtm-vm` opens the user's VM (or a picker, or the wizard if there are none). `lgtm-vm new`
+asks for an OS (downloaded with quickget: Windows 11 straight from Microsoft, ~100 Linux/BSD;
+or a link, or a local file) and sizes the VM. Each VM gets a menu entry.
+`lgtm-vm gpus` explains what graphics this PC can give a VM. The wizard tries, in order:
+1. **Spare GPU passthrough**: a second desktop GPU, or a laptop's render-only NVIDIA/AMD
+   GPU (class "3D controller", no ports) while the Intel GPU keeps the desktop. Windows is
+   shown through **Looking Glass B8**, whose virtual display driver (IDD) replaces dummy
+   plugs. B8 is a release candidate: client and Windows host must both be B8.
+   Laptop NVIDIA quirks added automatically: fake battery ACPI table
+   (`/var/lib/lgtm/vm/battery.aml`), the laptop's PCI subsystem IDs, vBIOS if readable.
+   Code 43 in Windows = needs the vBIOS file (see `lgtm-vm gpus`).
+   The GPU is listed in `/etc/lgtm/vm-gpus`; lgtm-session hides it from the compositor
+   (WLR_DRM_DEVICES) so it can be detached. "GPU still in use by ..." = log out and in.
+2. **Intel GPU slice (SR-IOV)**: `lgtm-vm share-gpu on` (i915-sriov-dkms, experimental,
+   can break on kernel updates; `/etc/lgtm/sriov`, `lgtm-sriov.service`).
+3. **Linux guests: 3D virtual GPU** (virtio-gpu + VirGL on the host's render node).
+4. **Plain virtual display**. No 3D; Windows on a single GPU without SR-IOV ends here
+   (there is no paravirtual DirectX for Windows guests). Suggest Proton for games.
+- Definitions: `~/.config/lgtm/vm/<name>.xml` + `.json` (keep: UUID, MAC, pinned machine
+  type = Windows activation). `lgtm-vm edit/stop/delete/list`. virsh/virt-manager also work.
+- Passthrough VMs get hugepages + pinned cores; `/etc/libvirt/hooks/qemu.d/lgtm-tuning`
+  keeps host processes/IRQs off those cores while running. "only N/M hugepages free" =
+  close apps or give the VM less memory.
+- Looking Glass config: `/usr/share/lgtm/looking-glass/client.ini` (user override in
+  `~/.config/looking-glass/client.ini`); frame buffer size `/etc/modprobe.d/kvmfr.conf`.
+  Right Ctrl captures input. One Looking Glass VM at a time.
+
+## Containers (lgtm-pod)
+Other distros via distrobox + rootless podman. `lgtm-pod new` (ubuntu, debian, fedora,
+arch, alpine, opensuse, kali, any image), `lgtm-pod install NAME PKG...` (distro's own
+package manager; new apps are exported to the menu), `enter`, `run`, `export NAME APP
+[--bin]`, `list`, `rm`, `upgrade`. Pods share home (optional separate home in
+`~/.local/share/lgtm/pods/`), display, sound, GPU. `.deb`/`.rpm` files use the
+`lgtm-ubuntu` / `lgtm-fedora` pods via lgtm-open. distrobox/podman commands work too.
 
 ## Login and boot
 - Encrypted installs: the password typed at the boot splash (Plymouth theme `lgtm`) unlocks
@@ -154,7 +176,8 @@ prints usage with `--help` or no arguments.
 | `lgtm-theme [NAME]` | List or switch themes |
 | `lgtm-setup [NAME]` | List or install setup profiles (gaming, windows-vm, dev) |
 | `lgtm-pkg FILE` | Install a packages list (repo + AUR) |
-| `lgtm-vm [create\|stop\|edit]` | Windows VM with Looking Glass |
+| `lgtm-vm [new\|open\|stop\|list\|gpus\|share-gpu]` | Virtual machines (wizard) |
+| `lgtm-pod [new\|enter\|install\|rm]` | Containers for other distros |
 | `lgtm-install` | Installer (live ISO only) |
 
 ## Memory and speed

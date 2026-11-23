@@ -190,6 +190,18 @@ export XDG_CONFIG_DIRS=$RUN/xdg:$SHARE/xdg:${XDG_CONFIG_DIRS:-/etc/xdg}
 export XDG_DATA_DIRS=$HOME/.local/share/flatpak/exports/share:/var/lib/flatpak/exports/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}
 case :$PATH: in *:$HOME/.local/bin:*) ;; *) export PATH=$HOME/.local/bin:$PATH ;; esac
 
+# GPUs reserved for VMs (lgtm-vm, /etc/lgtm/vm-gpus): the compositor opens only the
+# others, so a VM can take its GPU without the desktop crashing or blocking it.
+if [[ -s /etc/lgtm/vm-gpus ]]; then
+  read -ra reserved < /etc/lgtm/vm-gpus
+  keep=()
+  for c in /dev/dri/by-path/pci-*-card; do
+    a=${c#/dev/dri/by-path/pci-}; a=${a%-card}
+    [[ " ${reserved[*]} " == *" $a "* ]] || keep+=("$(readlink -f "$c")")
+  done
+  (( ${#keep[@]} )) && export WLR_DRM_DEVICES=$(IFS=:; echo "${keep[*]}")
+fi
+
 if [[ $MODE == glass ]]; then
   export XDG_CURRENT_DESKTOP=lgtm:wayfire
   cfg=$HOME/.config/wayfire.ini; [[ -r $cfg ]] || cfg=$RUN/wayfire.ini

@@ -1,59 +1,80 @@
 #!/usr/bin/env python3
-"""lgtm-vm: Windows in a VM, shown through Looking Glass like a native window.
+"""lgtm-vm: virtual machines (Windows, Linux, ...) that feel like part of the desktop.
 
-    lgtm-vm                open Windows (starts the VM if needed)
-    lgtm-vm create         make the VM: picks GPU, CPU cores, memory, disk for this PC
-    lgtm-vm stop           shut Windows down
-    lgtm-vm status         running / stopped
-    lgtm-vm edit           change the VM definition (virsh edit)
+    lgtm-vm                  open your VM (several: choose; none: the wizard)
+    lgtm-vm new              wizard: pick an OS (downloaded for you), it sizes the VM
+    lgtm-vm open NAME        start NAME if needed and show it
+    lgtm-vm stop NAME        shut it down          lgtm-vm list      your VMs
+    lgtm-vm delete NAME      remove it             lgtm-vm edit NAME (virsh edit)
+    lgtm-vm gpus             what graphics this PC can give a VM, and why
+    lgtm-vm share-gpu on|off split the Intel GPU for VMs (SR-IOV, experimental)
 
-Needs the "Windows VM" setup profile (lgtm-setup windows-vm). With a second GPU passed
-through, Windows draws on that GPU and Looking Glass copies its frames into a window
-here with no visible delay. Without one, the VM uses a virtual display instead.
+Graphics, best first (the wizard picks the first that works on this PC):
+  1. A spare GPU passed through: a second desktop card, or a laptop's NVIDIA/AMD GPU
+     that only renders (the Intel GPU keeps drawing the desktop). Full speed. Shown
+     through Looking Glass; its virtual display driver means no dummy plug.
+  2. A slice of the Intel GPU (SR-IOV, 11th gen+). Real Intel driver in Windows; the
+     host keeps its display. Experimental (lgtm-vm share-gpu on).
+  3. Linux guests: a 3D virtual GPU (virtio-gpu + VirGL) drawn by the host GPU.
+  4. A plain virtual display: no 3D. Fine for office apps.
+
+The plain tools still work on these VMs: virsh, virt-manager, virt-viewer.
 """
 import glob
 import json
 import os
+import random
 import re
 import shutil
 import subprocess
 import sys
 import time
 import uuid
-import random
 
 CONN = "qemu:///system"
 IMAGES = "/var/lib/libvirt/images"
-STATE = os.path.join(os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")), "lgtm", "vm")
-LG_INI = "/usr/share/lgtm/looking-glass/client.ini"
+LIB = "/var/lib/lgtm/vm"
+CFG = os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))
+STATE = os.path.join(CFG, "lgtm", "vm")
+CACHE = os.path.join(os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache")), "lgtm", "vm")
+APPS = os.path.join(os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share")), "applications")
+SHARE = os.environ.get("LGTM_SHARE", "/usr/share/lgtm")
+LG_INI = f"{SHARE}/looking-glass/client.ini"
+RESERVED = "/etc/lgtm/vm-gpus"
+SRIOV_CONF = "/etc/lgtm/sriov"
 NS = "https://github.com/qnlbnsl/lgtm-os/vm"
 VIRTIO_URL = "https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso"
 
+# The wizard's short list. Anything else: quickget's catalog, a link, or a file.
+CATALOG = [
+    ("Windows 11", "windows", "windows", "11"),
+    ("Ubuntu", "ubuntu", "linux", None),
+    ("Fedora", "fedora", "linux", None),
+    ("Debian", "debian", "linux", None),
+    ("Arch Linux", "archlinux", "linux", "latest"),
+    ("Linux Mint", "linuxmint", "linux", None),
+]
+
+
+# --- small helpers ----------------------------------------------------------------
 
 def die(msg):
     print(f"lgtm-vm: {msg}", file=sys.stderr)
-    notify("Windows VM", msg)
+    notify("Virtual machines", msg)
     sys.exit(1)
 
 
 def notify(title, body):
     if shutil.which("notify-send") and not sys.stdin.isatty():
-        subprocess.run(["notify-send", "-a", "LGTM OS", "-i", "computer", title, body],
-                       stderr=subprocess.DEVNULL)
+        subprocess.run(["notify-send", "-a", "LGTM OS", "-i", "computer", title, body], stderr=subprocess.DEVNULL)
 
 
-def virsh(*args, check=True, capture=True):
-    r = subprocess.run(["virsh", "-c", CONN, *args], capture_output=capture, text=True)
-    if check and r.returncode != 0:
-        die((r.stderr or "").strip() or f"virsh {' '.join(args)} failed")
-    return (r.stdout or "").strip()
-
-
-def default_name():
+def read(path, default=""):
     try:
-        return open(os.path.join(STATE, "default")).read().strip()
+        with open(path) as f:
+            return f.read().strip()
     except OSError:
-        return "win11"
+        return default
 
 
 def ask(prompt, default=""):
@@ -61,57 +82,142 @@ def ask(prompt, default=""):
     return r or str(default)
 
 
-def sh_sudo(*cmd, input_text=None):
-    subprocess.run(["sudo", *cmd], input=input_text, text=True, check=True)
+def ask_int(prompt, default, lo, hi):
+    while True:
+        r = ask(prompt, default)
+        if r.isdigit() and lo <= int(r) <= hi:
+            return int(r)
+        print(f"  enter a number from {lo} to {hi}")
 
 
-# --- hardware discovery -------------------------------------------------------------
-
-def read(path, default=""):
-    try:
-        return open(path).read().strip()
-    except OSError:
-        return default
+def yes(prompt, default="y"):
+    return ask(f"{prompt} (y/n)", default).lower().startswith("y")
 
 
-def pci_devices():
-    devs = []
-    for d in sorted(glob.glob("/sys/bus/pci/devices/*")):
-        addr = os.path.basename(d)
-        devs.append({
-            "addr": addr, "class": read(f"{d}/class"), "vendor": read(f"{d}/vendor"),
-            "boot_vga": read(f"{d}/boot_vga", "0") == "1",
-            "group": os.path.basename(os.path.realpath(f"{d}/iommu_group")) if os.path.exists(f"{d}/iommu_group") else None,
-            "driver": os.path.basename(os.path.realpath(f"{d}/driver")) if os.path.exists(f"{d}/driver") else "",
-            "name": lspci_name(addr),
-        })
-    return devs
+def choose(title, options, default=1):
+    """options: list of (label, detail-or-None, enabled). Returns 0-based index."""
+    print(f"\n{title}")
+    for i, (label, detail, ok) in enumerate(options, 1):
+        print(f"  {i}) {label}" if ok else f"  -) {label}")
+        if detail:
+            print(f"       {detail}")
+    while True:
+        r = ask("Choose", default)
+        if r.isdigit() and 1 <= int(r) <= len(options) and options[int(r) - 1][2]:
+            return int(r) - 1
+        print("  not available, pick another")
 
+
+def virsh(*args, check=True):
+    r = subprocess.run(["virsh", "-c", CONN, *args], capture_output=True, text=True)
+    if check and r.returncode != 0:
+        die((r.stderr or "").strip() or f"virsh {' '.join(args)} failed")
+    return (r.stdout or "").strip()
+
+
+def sudo(*cmd, input_text=None, check=True):
+    return subprocess.run(["sudo", *cmd], input=input_text, text=True, check=check).returncode
+
+
+def in_terminal(args):
+    if sys.stdin.isatty():
+        return
+    cmd = " ".join(["lgtm-vm", *args]) + "; echo; read -rp 'Press Enter to close' _"
+    os.execvp("foot", ["foot", "--app-id=lgtm.setup", "--title=Virtual machines", "-e", "bash", "-c", cmd])
+
+
+def need_tools(args):
+    if shutil.which("virsh") and shutil.which("qemu-system-x86_64"):
+        return
+    in_terminal(args)
+    print("Virtual machines need the VM tools (QEMU, libvirt, Looking Glass, quickget).")
+    if yes("Install them now (lgtm-setup vm)?"):
+        subprocess.run(["lgtm-setup", "vm"], check=False)
+        print("\nRestart the computer (it turns on the IOMMU for GPU passthrough), then run lgtm-vm again.")
+    sys.exit(0)
+
+
+# --- hardware detection --------------------------------------------------------------
 
 def lspci_name(addr):
-    try:
-        out = subprocess.run(["lspci", "-s", addr], capture_output=True, text=True).stdout.strip()
-        return out.split(": ", 1)[1] if ": " in out else out
-    except FileNotFoundError:
-        return addr
+    out = subprocess.run(["lspci", "-s", addr], capture_output=True, text=True).stdout.strip() if shutil.which("lspci") else ""
+    return out.split(": ", 1)[1] if ": " in out else addr
 
 
-def same_slot(devs, addr):
-    slot = addr.rsplit(".", 1)[0]
-    return [d for d in devs if d["addr"].rsplit(".", 1)[0] == slot]
+def pci(addr):
+    d = f"/sys/bus/pci/devices/{addr}"
+    return {
+        "addr": addr, "class": read(f"{d}/class"), "vendor": read(f"{d}/vendor"),
+        "subvendor": read(f"{d}/subsystem_vendor"), "subdevice": read(f"{d}/subsystem_device"),
+        "group": os.path.basename(os.path.realpath(f"{d}/iommu_group")) if os.path.exists(f"{d}/iommu_group") else None,
+        "driver": os.path.basename(os.path.realpath(f"{d}/driver")) if os.path.exists(f"{d}/driver") else "",
+        "name": lspci_name(addr),
+    }
 
 
-def group_ok(devs, chosen):
-    """Every device in the chosen devices' IOMMU groups must go to the VM too (bridges excepted)."""
-    groups = {d["group"] for d in chosen}
-    addrs = {d["addr"] for d in chosen}
-    extra = [d for d in devs if d["group"] in groups and d["addr"] not in addrs
-             and not d["class"].startswith("0x0604")]
-    return extra
+def all_pci():
+    return [pci(os.path.basename(d)) for d in sorted(glob.glob("/sys/bus/pci/devices/*"))]
+
+
+def iommu_on():
+    return bool(glob.glob("/sys/kernel/iommu_groups/*"))
+
+
+def gpus():
+    """Every display device, with what it can do for a VM."""
+    res = []
+    reserved = read(RESERVED).split()
+    for d in sorted(glob.glob("/sys/bus/pci/devices/*")):
+        if not read(f"{d}/class").startswith("0x03"):
+            continue
+        g = pci(os.path.basename(d))
+        if read(f"{d}/physfn") or os.path.exists(f"{d}/physfn"):
+            continue  # an SR-IOV slice, listed under its parent
+        conns = glob.glob(f"{d}/drm/card*/card*-*")
+        g["outputs"] = len(conns)
+        g["connected"] = any(read(f"{c}/status") == "connected" for c in conns)
+        g["boot_vga"] = read(f"{d}/boot_vga", "0") == "1"
+        g["host_display"] = (g["boot_vga"] or g["connected"]) and g["addr"] not in reserved
+        # Render-only: a laptop's discrete GPU ("3D controller", no display outputs).
+        g["render_only"] = g["class"].startswith("0x0302") or (g["driver"] not in ("", "vfio-pci") and not conns)
+        g["laptop_nvidia"] = g["vendor"] == "0x10de" and g["render_only"]
+        g["sriov_total"] = int(read(f"{d}/sriov_totalvfs", "0") or 0)
+        g["vfs"] = [os.path.basename(os.path.realpath(v)) for v in sorted(glob.glob(f"{d}/virtfn*"))]
+        res.append(g)
+    return res
+
+
+def graphics_options(kind):
+    """Graphics choices for a guest kind, best first: (id, label, detail, ok, data)."""
+    gs = gpus()
+    opts = []
+    for g in gs:
+        if g["host_display"] and not g["render_only"]:
+            continue  # it draws the desktop; it stays
+        what = "laptop GPU (renders only, no ports)" if g["render_only"] else "spare GPU"
+        ok, why = iommu_on(), ("" if iommu_on() else "  [needs the IOMMU: run lgtm-setup vm, restart, enable VT-d/AMD-Vi in firmware]")
+        opts.append(("passthrough", f"Pass through the {what}: {g['name']}",
+                     f"Full speed. Shown with Looking Glass, no dummy plug needed.{why}", ok, g))
+    for g in gs:
+        if g["sriov_total"] and g["vendor"] == "0x8086":
+            used = used_addrs()
+            free = [v for v in g["vfs"] if v not in used]
+            if free:
+                opts.append(("vf", f"A slice of the Intel GPU ({free[0]}, SR-IOV, experimental)",
+                             "Real Intel driver in the guest; the desktop keeps the GPU too.", iommu_on(), {**pci(free[0]), "parent": g}))
+            else:
+                opts.append(("vf", "A slice of the Intel GPU (SR-IOV, experimental)",
+                             "Not set up: run `lgtm-vm share-gpu on`, then restart." if not g["vfs"]
+                             else "All slices are in use by other VMs.", False, None))
+    if kind == "linux":
+        opts.append(("virgl", "3D virtual GPU (virtio-gpu + VirGL)",
+                     "Drawn by this PC's GPU. Good for desktops and light 3D; no passthrough needed.", True, None))
+    opts.append(("virtual", "Plain virtual display (no 3D)",
+                 "Always works. Fine for office apps, slow for games and video.", True, None))
+    return opts
 
 
 def cores():
-    """Physical cores as sorted lists of their hardware threads, in order."""
     seen = {}
     for c in glob.glob("/sys/devices/system/cpu/cpu[0-9]*"):
         if read(f"{c}/online", "1") != "1":
@@ -132,288 +238,489 @@ def monitor_pixels():
     for st in glob.glob("/sys/class/drm/card*-*/status"):
         if read(st) != "connected":
             continue
-        modes = read(os.path.join(os.path.dirname(st), "modes")).splitlines()
-        for m in modes[:1]:
-            m = re.match(r"(\d+)x(\d+)", m)
-            if m:
-                best = max(best, int(m[1]) * int(m[2]))
+        m = re.match(r"(\d+)x(\d+)", read(os.path.join(os.path.dirname(st), "modes")))
+        if m:
+            best = max(best, int(m[1]) * int(m[2]))
     return best or 2560 * 1440
 
 
 def kvmfr_mb(pixels):
-    need = pixels * 4 * 2 + 10 * 1024 * 1024
-    mb = 32
+    need, mb = pixels * 4 * 2 + 10 * 1024 * 1024, 32
     while mb * 1024 * 1024 < need:
         mb *= 2
     return mb
 
 
 def machine_type():
-    """Pin the exact QEMU machine version: it's part of Windows' activation fingerprint."""
+    """Pinned machine version: part of Windows' activation fingerprint."""
+    out = subprocess.run(["qemu-system-x86_64", "-machine", "help"], capture_output=True, text=True).stdout \
+        if shutil.which("qemu-system-x86_64") else ""
+    m = re.search(r"^q35\s.*\(alias of (\S+)\)", out, re.M)
+    return m[1] if m else "q35"
+
+
+def busy_nvme(addr):
+    mounted = {l.split()[0] for l in open("/proc/mounts")}
+    for ns in glob.glob(f"/sys/bus/pci/devices/{addr}/nvme/nvme*/nvme*n*"):
+        base = os.path.basename(ns)
+        names = [base] + [os.path.basename(p) for p in glob.glob(f"{ns}/{base}p*")]
+        if any(f"/dev/{n}" in mounted for n in names) or glob.glob(f"{ns}/holders/*") or glob.glob(f"{ns}/{base}p*/holders/*"):
+            return True
+    return False
+
+
+# --- our VMs ------------------------------------------------------------------------
+
+def my_vms():
+    names = []
+    for f in sorted(glob.glob(os.path.join(STATE, "*.json"))):
+        names.append(os.path.basename(f)[:-5])
+    return names
+
+
+def meta(name):
     try:
-        out = subprocess.run(["qemu-system-x86_64", "-machine", "help"], capture_output=True, text=True).stdout
-        m = re.search(r"^q35\s.*\(alias of (\S+)\)", out, re.M)
-        return m[1] if m else "q35"
-    except FileNotFoundError:
-        return "q35"
+        with open(os.path.join(STATE, f"{name}.json")) as f:
+            return json.load(f)
+    except OSError:
+        return {}
 
 
-# --- create -----------------------------------------------------------------------
+def used_addrs():
+    used = set()
+    for n in my_vms():
+        used |= set(meta(n).get("pci", []))
+    return used
 
-def create():
-    if not shutil.which("virsh"):
-        die("the Windows VM tools aren't installed: run lgtm-setup windows-vm")
-    if not sys.stdin.isatty():
-        os.execvp("foot", ["foot", "--app-id=lgtm.setup", "--title=Create Windows VM", "-e", "bash", "-c",
-                           "lgtm-vm create; echo; read -rp 'Press Enter to close' _"])
-    print("\n  Create a Windows 11 VM\n  ----------------------\n")
-    name = ask("Name", "win11")
-    if not re.fullmatch(r"[A-Za-z0-9_-]+", name):
-        die("use letters, digits, - and _ only")
-    if virsh("dominfo", name, check=False):
-        die(f"a VM named {name} already exists (lgtm-vm edit, or virsh undefine {name})")
 
-    devs = pci_devices()
-    iommu = any(d["group"] for d in devs)
+def state(name):
+    out = virsh("domstate", name, check=False)
+    return out.splitlines()[0] if out else ""
 
-    # GPU
-    gpus = [d for d in devs if d["class"].startswith("0x03")]
-    candidates = [g for g in gpus if not g["boot_vga"]] if len(gpus) > 1 else []
-    gpu = []
-    print("\nGraphics for Windows:")
-    print("  0) Virtual display (no GPU passthrough; fine for apps, slow for games)")
-    for i, g in enumerate(candidates, 1):
-        print(f"  {i}) Pass through {g['addr']} {g['name']}")
-    if not candidates:
-        print("     (Passthrough needs a second GPU: the one showing this desktop stays here.)")
-    c = int(ask("Choose", 1 if candidates else 0) or 0)
-    if c:
-        if not iommu:
-            die("the IOMMU is off: restart after lgtm-setup windows-vm, and enable VT-d / AMD-Vi "
-                "(SVM + IOMMU) in the firmware settings")
-        gpu = same_slot(devs, candidates[c - 1]["addr"])
-        extra = group_ok(devs, gpu)
-        if extra:
-            print("  Warning: these share the GPU's IOMMU group and will leave the host while the VM runs:")
-            for d in extra:
-                print(f"    {d['addr']} {d['name']}")
-            if ask("  Continue? (y/n)", "n").lower()[:1] != "y":
-                sys.exit(1)
-            gpu += extra
 
-    # CPU: whole cores from the top, host keeps the first ones (and at least 2).
+# --- getting the OS -------------------------------------------------------------------
+
+def quickget_releases(os_id):
+    out = subprocess.run(["quickget", os_id], capture_output=True, text=True).stdout
+    m = re.search(r"Releases:\s*(.+)", out)
+    rels = m[1].split() if m else []
+    return sorted(rels, key=lambda r: [int(x) if x.isdigit() else x for x in re.split(r"(\d+)", r)], reverse=True)
+
+
+def quickget_download(os_id, release):
+    """Download with quickget (it fetches from the OS's own servers; Windows from Microsoft)."""
+    work = os.path.join(CACHE, "downloads")
+    os.makedirs(work, exist_ok=True)
+    args = ["quickget", "--download", os_id, release]
+    r = subprocess.run(args, cwd=work, capture_output=True, text=True)
+    if "must specify an edition" in (r.stdout + r.stderr):
+        eds = re.search(r"Editions:\s*(.+)", r.stdout)
+        eds = eds[1].split() if eds else []
+        i = choose("Edition:", [(e, None, True) for e in eds], 1)
+        args.append(eds[i])
+    print(f">> downloading {os_id} {release} (quickget)…")
+    if subprocess.run(args, cwd=work).returncode != 0:
+        die(f"quickget couldn't download {os_id} {release}")
+    return newest_image(work)
+
+
+def newest_image(folder):
+    found = [p for ext in ("iso", "img", "qcow2", "raw") for p in glob.glob(f"{folder}/**/*.{ext}", recursive=True)]
+    found = [p for p in found if "virtio" not in os.path.basename(p)]
+    if not found:
+        die(f"no disk image found in {folder}")
+    return max(found, key=os.path.getmtime)
+
+
+def url_download(url):
+    work = os.path.join(CACHE, "downloads")
+    os.makedirs(work, exist_ok=True)
+    name = re.sub(r"[^A-Za-z0-9._-]", "_", url.split("?")[0].rstrip("/").split("/")[-1]) or "download.iso"
+    dest = os.path.join(work, name)
+    print(f">> downloading {url}")
+    if subprocess.run(["curl", "-fL", "-C", "-", "--progress-bar", "-o", dest, url]).returncode != 0:
+        die("download failed")
+    if name.endswith((".xz", ".gz", ".zst")):
+        tool = {"xz": "unxz", "gz": "gunzip", "zst": "unzstd"}[name.rsplit(".", 1)[1]]
+        subprocess.run([tool, "-f", dest], check=True)
+        dest = dest.rsplit(".", 1)[0]
+    return dest
+
+
+def pick_os():
+    """Returns (label, kind, local image path or None until downloaded, fetch function)."""
+    opts = [(c[0], None, True) for c in CATALOG] + [
+        ("Another OS (quickget's catalog of ~100)", "e.g. kali, nixos, popos, opensuse, freebsd, ...", True),
+        ("Download from a link", "Paste a URL to an .iso / .img (also .xz/.gz/.zst)", True),
+        ("A file on this computer", "An .iso, .img or .qcow2 you already have", True)]
+    i = choose("Which operating system?", opts, 1)
+    if i < len(CATALOG):
+        label, os_id, kind, rel = CATALOG[i]
+        return label, kind, os_id, rel
+    if i == len(CATALOG):
+        os_id = ask("quickget name (see `quickget --list`)").lower()
+        kind = "windows" if os_id.startswith("windows") else "linux"
+        return os_id, kind, os_id, None
+    if i == len(CATALOG) + 1:
+        url = ask("Link")
+        if not re.match(r"https?://", url):
+            die("that isn't an http(s) link")
+        kind = "windows" if yes("Is it Windows?", "n") else "linux"
+        return url.split("/")[-1], kind, ("url", url), None
+    path = os.path.expanduser(ask("Path"))
+    if not os.path.isfile(path):
+        die(f"no such file: {path}")
+    kind = "windows" if yes("Is it Windows?", "n") else "linux"
+    return os.path.basename(path), kind, ("file", path), None
+
+
+# --- the wizard ---------------------------------------------------------------------
+
+def new(args):
+    need_tools(["new"])
+    in_terminal(["new"])
+    print("\n  New virtual machine\n  -------------------")
+    label, kind, source, release = pick_os()
+
+    if isinstance(source, str) and release is None:
+        print("  checking available versions…")
+        rels = quickget_releases(source)
+        if not rels:
+            die(f"quickget doesn't know '{source}' (see: quickget --list)")
+        release = rels[choose("Version:", [(r, None, True) for r in rels[:12]], 1)] if len(rels) > 1 else rels[0]
+
+    base = re.sub(r"[^a-z0-9]+", "-", (f"{source}-{release}" if isinstance(source, str) else label).lower()).strip("-")
+    base = {"windows-11": "win11"}.get(base, base)[:24] or "vm"
+    name, n = base, 2
+    while name in my_vms() or virsh("dominfo", name, check=False):
+        name, n = f"{base}-{n}", n + 1
+    name = ask("\nName", name)
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", name) or virsh("dominfo", name, check=False):
+        die("pick another name (letters, digits, - and _; not already used)")
+
+    # Graphics: the first option that works here is the default.
+    opts = graphics_options(kind)
+    default = next(i for i, o in enumerate(opts) if o[3]) + 1
+    gi = choose("Graphics (best first):", [(o[1], o[2], o[3]) for o in opts], default)
+    gfx, gdev = opts[gi][0], opts[gi][4]
+    fast = gfx in ("passthrough", "vf")
+
     cs = cores()
-    n_default = max(1, min(len(cs) // 2, 8))
-    n = int(ask(f"\nCPU cores for Windows (this PC has {len(cs)})", n_default))
-    n = max(1, min(n, len(cs) - 2 if len(cs) > 2 else 1))
-    vm_cores, host_cores = cs[len(cs) - n:], cs[:len(cs) - n]
-    threads = len(vm_cores[0])
+    total = int(re.search(r"MemTotal:\s+(\d+)", read("/proc/meminfo"))[1]) // 1024 // 1024
+    max_cores = max(1, len(cs) - 1)
+    ncores = ask_int(f"\nCPU cores (this PC has {len(cs)})", max(1, min(len(cs) // 2, 8)) if fast else min(2, max_cores), 1, max_cores)
+    mem_default = max(4, min(16, total // 2)) if fast else (8 if kind == "windows" else 4)
+    mem = ask_int(f"Memory in GB (this PC has {total}; leave LGTM OS 3)", min(mem_default, max(2, total - 3)), 2, max(2, total - 3))
 
-    # Memory
-    total = int(re.search(r"MemTotal:\s+(\d+)", open("/proc/meminfo").read())[1]) // 1024 // 1024
-    mem = int(ask(f"Memory for Windows in GB (this PC has {total})", max(4, min(16, total // 2))))
-    if mem > total - 3:
-        die(f"leave at least 3 GB for LGTM OS (max {total - 3})")
+    nvmes = [d for d in all_pci() if d["class"].startswith("0x0108") and not busy_nvme(d["addr"])]
+    disk_opts = [("A new virtual disk", None, True)] + [
+        (f"A whole NVMe drive, passed through: {d['name']}", "The OS can also boot it bare metal. ERASED by setup.", iommu_on())
+        for d in nvmes]
+    di = choose("Disk:", disk_opts, 1) if nvmes else 0
+    nvme = nvmes[di - 1] if di else None
+    disk_gb = None if nvme else ask_int("Disk size in GB", 80 if kind == "windows" else 40, 8, 4096)
 
-    # Disk
-    nvmes = [d for d in devs if d["class"].startswith("0x0108")]
-    nvmes = [d for d in nvmes if not busy_nvme(d["addr"])]
-    print("\nWhere Windows is installed:")
-    print("  0) A new virtual disk in " + IMAGES)
-    for i, d in enumerate(nvmes, 1):
-        print(f"  {i}) A whole NVMe drive, passed through: {d['addr']} {d['name']} (Windows can also boot it bare metal)")
-    dc = int(ask("Choose", 0) or 0)
-    disk_size, nvme = None, None
-    if dc:
-        nvme = nvmes[dc - 1]
-    else:
-        disk_size = int(ask("Virtual disk size in GB", 128))
+    shares = []
+    if yes("Share ~/Documents, ~/Downloads and ~/Work with it?"):
+        shares = [d for d in ("Documents", "Downloads", "Work") if os.path.isdir(os.path.expanduser(f"~/{d}"))]
 
-    # Installer media
-    iso = find_iso()
-    if not iso:
-        die("no Windows 11 ISO: download it from microsoft.com/software-download/windows11 "
-            "into ~/Downloads (Win11_*.iso), then run lgtm-vm create again")
-    print(f"\nWindows installer: {iso}")
-
-    # Shared folders
-    shares = [d for d in ("Documents", "Downloads", "Work") if os.path.isdir(os.path.expanduser(f"~/{d}"))]
-
-    lg = bool(gpu)
-    pixels = monitor_pixels()
-    mb = kvmfr_mb(pixels)
-
-    print("\nSummary:")
-    print(f"  {name}: {n} cores ({n * threads} threads), {mem} GB, "
-          f"{'GPU ' + gpu[0]['name'] if gpu else 'virtual display'}, "
-          f"{'NVMe ' + nvme['addr'] if nvme else f'{disk_size} GB virtual disk'}")
-    if lg:
-        print(f"  Looking Glass: {mb} MiB shared framebuffer (for this monitor's resolution)")
-    if shares:
-        print(f"  Shared with Windows: ~/{', ~/'.join(shares)}")
-    if ask("Create it? (y/n)", "y").lower()[:1] != "y":
+    vm_cores = cs[len(cs) - ncores:] if fast else []
+    host_cores = cs[:len(cs) - ncores] if fast else cs
+    lg = gfx in ("passthrough", "vf") and kind == "windows"
+    mb = kvmfr_mb(monitor_pixels())
+    print(f"\n  {name}: {label}{' ' + release if release else ''}, {ncores} cores, {mem} GB, "
+          f"{opts[gi][1]}, {'NVMe ' + nvme['addr'] if nvme else f'{disk_gb} GB disk'}"
+          f"{', shares ~/' + ', ~/'.join(shares) if shares else ''}")
+    if not yes("Create it?"):
         sys.exit(1)
 
-    # Media into the libvirt images folder.
-    sh_sudo("install", "-d", IMAGES)
-    win_iso = f"{IMAGES}/{name}-install.iso"
-    if not os.path.exists(win_iso):
-        sh_sudo("cp", iso, win_iso)
-    virtio = f"{IMAGES}/virtio-win.iso"
-    if not os.path.exists(virtio):
-        print(">> downloading the VirtIO drivers for Windows (virtio-win.iso)")
-        sh_sudo("curl", "-fL", "-o", virtio, VIRTIO_URL)
+    # 1. The OS image.
+    if isinstance(source, str):
+        img = quickget_download(source, release)
+    elif source[0] == "url":
+        img = url_download(source[1])
+    else:
+        img = source[1]
+    sudo("install", "-d", IMAGES, LIB)
+    is_disk_image = img.endswith((".qcow2", ".img", ".raw")) and not img.endswith(".iso")
+    media = f"{IMAGES}/{name}-install.iso"
     disk_path = f"{IMAGES}/{name}.qcow2"
-    if disk_size and not os.path.exists(disk_path):
-        sh_sudo("qemu-img", "create", "-q", "-f", "qcow2", "-o", "preallocation=metadata", disk_path, f"{disk_size}G")
+    if is_disk_image:
+        fmt = "qcow2" if img.endswith(".qcow2") else "raw"
+        sudo("qemu-img", "convert", "-p", "-O", "qcow2", "-f", fmt, img, disk_path)
+        if disk_gb:
+            sudo("qemu-img", "resize", "-q", disk_path, f"{disk_gb}G", check=False)
+        media = None
+    else:
+        sudo("cp", img, media)
+        if disk_gb:
+            sudo("qemu-img", "create", "-q", "-f", "qcow2", "-o", "preallocation=metadata", disk_path, f"{disk_gb}G")
+    virtio = f"{IMAGES}/virtio-win.iso" if kind == "windows" else None
+    if virtio and not os.path.exists(virtio):
+        print(">> downloading the VirtIO drivers for Windows")
+        sudo("curl", "-fL", "--progress-bar", "-o", virtio, VIRTIO_URL)
 
+    # 2. Graphics plumbing.
+    pci_devs, quirks = [], {}
+    if gfx == "passthrough":
+        pci_devs = [d for d in all_pci() if d["addr"].rsplit(".", 1)[0] == gdev["addr"].rsplit(".", 1)[0]]
+        groups = {d["group"] for d in pci_devs}
+        extra = [d for d in all_pci() if d["group"] in groups and d not in pci_devs and not d["class"].startswith("0x0604")]
+        if extra:
+            print("  These share the GPU's IOMMU group and go to the VM while it runs:")
+            for d in extra:
+                print(f"    {d['addr']} {d['name']}")
+            if not yes("  Continue?", "n"):
+                sys.exit(1)
+            pci_devs += extra
+        reserve(gdev["addr"])
+        if gdev["laptop_nvidia"]:
+            quirks = laptop_nvidia(name, gdev)
+    elif gfx == "vf":
+        pci_devs = [gdev]
     if lg:
-        conf = f"# Looking Glass shared framebuffer (/dev/kvmfr0), sized by lgtm-vm create.\noptions kvmfr static_size_mb={mb}\n"
-        sh_sudo("tee", "/etc/modprobe.d/kvmfr.conf", input_text=conf)
-        cur = read("/sys/module/kvmfr/parameters/static_size_mb")
-        if cur and cur.split(",")[0] != str(mb):
-            subprocess.run(["sudo", "sh", "-c", "rmmod kvmfr && modprobe kvmfr && udevadm trigger --subsystem-match=kvmfr"],
-                           stderr=subprocess.DEVNULL)
+        set_kvmfr(mb)
 
-    xml = domain_xml(name, mem, vm_cores, host_cores, threads, gpu, nvme, disk_path if disk_size else None,
-                     win_iso, virtio, shares, lg, mb)
+    # 3. Define it.
+    cfg = dict(name=name, kind=kind, mem=mem, vm_cores=vm_cores, host_cores=host_cores, gfx=gfx,
+               pci=pci_devs, nvme=nvme, disk=None if nvme else disk_path, media=media, virtio=virtio,
+               shares=shares, lg=lg, mb=mb, quirks=quirks,
+               rendernode=render_node(), ncores=ncores)
+    xml = domain_xml(cfg)
     os.makedirs(STATE, exist_ok=True)
     path = os.path.join(STATE, f"{name}.xml")
     with open(path, "w") as f:
         f.write(xml)
     virsh("define", path)
-    with open(os.path.join(STATE, "default"), "w") as f:
-        f.write(name + "\n")
-    print(f"\nCreated {name} (definition saved in {path}).")
-    print("""
-Next:
-  1. Run lgtm-vm (or the Windows icon in the menu) and install Windows.""")
-    if disk_size:
-        print("     At \"Where do you want to install Windows?\": Load driver > virtio CD > viostor\\w11\\amd64.")
-    print("""  2. In Windows, from the virtio CD: virtio-win-guest-tools.exe (network, shared folders, ...).""")
-    if lg:
-        print("""  3. Install your GPU's Windows driver, then the Looking Glass host
-     (looking-glass.io/downloads, version B7, "looking-glass-host-setup.exe").
-     Plug a dummy HDMI/DP plug (or a monitor) into the passed-through GPU so Windows
-     has a screen to draw on. From then on Windows opens fullscreen here.
-     Right Ctrl captures/releases the keyboard and mouse.""")
-    print("Your Windows activation stays valid across rebuilds if you keep "
-          f"{path} (UUID, MAC and machine version).")
+    with open(os.path.join(STATE, f"{name}.json"), "w") as f:
+        json.dump({"label": f"{label} {release or ''}".strip(), "kind": kind, "gfx": gfx, "lg": lg,
+                   "pci": [d["addr"] for d in pci_devs]}, f, indent=1)
+    desktop_entry(name, f"{label} {release or ''}".strip(), kind)
+
+    print(f"\nCreated {name}. It's in the app menu; definition: {path} (keep it: it holds the")
+    print("UUID / MAC / machine version that Windows activation is tied to).")
+    if kind == "windows":
+        steps = ["Install Windows. On the disk page, if no disk shows: none needed (SATA)."]
+        steps.append("In Windows, run virtio-win-guest-tools.exe from the virtio CD (network, shared folders).")
+        if lg:
+            steps.append("Install the GPU's Windows driver (Windows Update usually finds it), then the "
+                         "Looking Glass host for B8 (looking-glass.io/downloads: the IDD build). Its virtual "
+                         "display replaces a dummy plug. From then on the VM opens fullscreen here; "
+                         "Right Ctrl captures/releases keyboard and mouse.")
+            if gfx == "passthrough" and gdev["laptop_nvidia"] and not quirks.get("rom"):
+                steps.append("If the NVIDIA driver reports Code 43: the GPU needs its vBIOS. See `lgtm-vm gpus`.")
+        print("\nNext:")
+        for i, s in enumerate(steps, 1):
+            print(f"  {i}. {s}")
+    if yes("\nStart it now?"):
+        open_vm(name)
 
 
-def busy_nvme(addr):
-    """True if any partition of this NVMe controller's drives is mounted (e.g. LGTM OS itself)."""
-    mounted = {l.split()[0] for l in open("/proc/mounts")}
-    for ns in glob.glob(f"/sys/bus/pci/devices/{addr}/nvme/nvme*/nvme*n*"):
-        base = os.path.basename(ns)
-        names = [base] + [os.path.basename(p) for p in glob.glob(f"{ns}/{base}p*")]
-        if any(f"/dev/{n}" in mounted for n in names):
-            return True
-        if any(glob.glob(f"{ns}/holders/*")) or any(glob.glob(f"{ns}/{base}p*/holders/*")):
-            return True   # LUKS / LVM on it
-    return False
+def reserve(addr):
+    """Keep the desktop off a GPU that VMs use, so it can be handed over cleanly."""
+    cur = read(RESERVED).split()
+    if addr not in cur:
+        sudo("sh", "-c", f"mkdir -p /etc/lgtm && echo {' '.join(cur + [addr])} > {RESERVED}")
+        print("  (The desktop stops using this GPU from your next login.)")
 
 
-def find_iso():
-    found = sorted(glob.glob(os.path.expanduser("~/Downloads/Win*11*.iso")), key=os.path.getmtime, reverse=True)
-    return found[0] if found else None
+def render_node():
+    for g in gpus():
+        if g["host_display"]:
+            r = glob.glob(f"/dev/dri/by-path/pci-{g['addr']}-render")
+            if r:
+                return os.path.realpath(r[0])
+    r = sorted(glob.glob("/dev/dri/renderD*"))
+    return r[0] if r else None
 
 
-def pci_hostdev(addr, boot=None, guest=None):
-    dom, bus, rest = addr.split(":")
+def laptop_nvidia(name, g):
+    """Laptop NVIDIA GPUs: driver wants a battery, the laptop's subsystem IDs, maybe the vBIOS."""
+    q = {"subvendor": int(g["subvendor"], 16), "subdevice": int(g["subdevice"], 16)}
+    aml = f"{LIB}/battery.aml"
+    if not os.path.exists(aml):
+        if shutil.which("iasl"):
+            tmp = os.path.join(CACHE, "battery")
+            os.makedirs(tmp, exist_ok=True)
+            shutil.copy(f"{SHARE}/vm/battery.asl", f"{tmp}/battery.asl")
+            subprocess.run(["iasl", "-p", f"{tmp}/battery", f"{tmp}/battery.asl"], capture_output=True)
+            if os.path.exists(f"{tmp}/battery.aml"):
+                sudo("install", "-m644", f"{tmp}/battery.aml", aml)
+        else:
+            print("  note: acpica (iasl) missing; no fake battery table. Run lgtm-setup vm.")
+    if os.path.exists(aml):
+        q["battery"] = aml
+    rom = f"{LIB}/{g['addr'].replace(':', '_')}.rom"
+    if not os.path.exists(rom):
+        sysrom = f"/sys/bus/pci/devices/{g['addr']}/rom"
+        sudo("sh", "-c", f"echo 1 > {sysrom} && cat {sysrom} > {rom}.tmp; echo 0 > {sysrom}", check=False)
+        ok = subprocess.run(["sudo", "head", "-c", "2", f"{rom}.tmp"], capture_output=True).stdout == b"\x55\xaa"
+        sudo("sh", "-c", f"if [ {int(ok)} = 1 ]; then mv {rom}.tmp {rom}; else rm -f {rom}.tmp; fi", check=False)
+    if os.path.exists(rom):
+        q["rom"] = rom
+    return q
+
+
+def set_kvmfr(mb):
+    want = f"options kvmfr static_size_mb={mb}"
+    if read("/etc/modprobe.d/kvmfr.conf").splitlines()[-1:] == [want]:
+        return
+    sudo("tee", "/etc/modprobe.d/kvmfr.conf", input_text=f"# Looking Glass frame buffer, sized by lgtm-vm for this monitor.\n{want}\n")
+    cur = read("/sys/module/kvmfr/parameters/static_size_mb")
+    if cur and cur.split(",")[0] != str(mb):
+        subprocess.run(["sudo", "sh", "-c", "rmmod kvmfr && modprobe kvmfr && udevadm trigger --subsystem-match=kvmfr"],
+                       stderr=subprocess.DEVNULL)
+
+
+def desktop_entry(name, label, kind):
+    os.makedirs(APPS, exist_ok=True)
+    with open(os.path.join(APPS, f"lgtm-vm-{name}.desktop"), "w") as f:
+        f.write(f"""[Desktop Entry]
+Type=Application
+Name={label}
+Comment=Virtual machine {name}
+Exec=lgtm-vm open {name}
+Icon={'computer' if kind == 'windows' else 'distributor-logo'}
+Categories=System;Emulator;
+Keywords=vm;virtual;{name};
+Actions=stop;
+X-LGTM-VM={name}
+
+[Desktop Action stop]
+Name=Shut down
+Exec=lgtm-vm stop {name}
+""")
+
+
+def pci_hostdev(d, boot=None, guest_bus=None, alias=None, rom=None):
+    dom, bus, rest = d["addr"].split(":")
     slot, fn = rest.split(".")
-    b = f'\n      <boot order="{boot}"/>' if boot else ""
-    g = ""
-    if guest:
+    extra = ""
+    if rom:
+        extra += f'\n      <rom file="{rom}"/>'
+    elif d.get("parent"):
+        extra += '\n      <rom bar="off"/>'
+    if boot:
+        extra += f'\n      <boot order="{boot}"/>'
+    if alias:
+        extra += f'\n      <alias name="{alias}"/>'
+    if guest_bus:
         multi = ' multifunction="on"' if fn == "0" else ""
-        g = (f'\n      <address type="pci" domain="0x0000" bus="{guest[0]}" slot="0x00" '
-             f'function="0x{fn}"{multi}/>')
+        extra += f'\n      <address type="pci" domain="0x0000" bus="{guest_bus}" slot="0x00" function="0x{fn}"{multi}/>'
     return f"""    <hostdev mode="subsystem" type="pci" managed="yes">
       <source>
         <address domain="0x{dom}" bus="0x{bus}" slot="0x{slot}" function="0x{fn}"/>
-      </source>{b}{g}
+      </source>{extra}
     </hostdev>"""
 
 
-def domain_xml(name, mem, vm_cores, host_cores, threads, gpu, nvme, disk, win_iso, virtio, shares, lg, mb):
-    u = str(uuid.uuid4())
-    mac = "52:54:00:%02x:%02x:%02x" % tuple(random.randrange(256) for _ in range(3))
-    vcpus = [t for c in vm_cores for t in c]
-    pins = "\n".join(f'    <vcpupin vcpu="{i}" cpuset="{t}"/>' for i, t in enumerate(vcpus))
-    emu = ",".join(str(t) for t in (host_cores[0] if host_cores else vm_cores[0]))
+def domain_xml(c):
+    u, mac = str(uuid.uuid4()), "52:54:00:%02x:%02x:%02x" % tuple(random.randrange(256) for _ in range(3))
+    fast = c["gfx"] in ("passthrough", "vf")
+    win = c["kind"] == "windows"
+    mt = machine_type()
+    vcpus = [t for core in c["vm_cores"] for t in core]
+    threads = len(c["vm_cores"][0]) if fast else 1
+    if fast:
+        cputune = "  <cputune>\n" + "\n".join(f'    <vcpupin vcpu="{i}" cpuset="{t}"/>' for i, t in enumerate(vcpus))
+        emu = ",".join(str(t) for t in (c["host_cores"][0] if c["host_cores"] else c["vm_cores"][0]))
+        cputune += f'\n    <emulatorpin cpuset="{emu}"/>\n  </cputune>'
+        vcpu_n, topo = len(vcpus), f'cores="{len(c["vm_cores"])}" threads="{threads}"'
+    else:
+        cputune = ""   # shared cores: the host scheduler places the vCPUs
+        vcpu_n = c.get("ncores", 2)
+        topo = f'cores="{vcpu_n}" threads="1"'
     home = os.path.expanduser("~")
     fs = "\n".join(f"""    <filesystem type="mount" accessmode="passthrough">
       <driver type="virtiofs"/>
       <source dir="{home}/{s}"/>
       <target dir="{s}"/>
-    </filesystem>""" for s in shares)
-    storage = ""
-    if disk:
+    </filesystem>""" for s in c["shares"])
+    if c["nvme"]:
+        storage = "    <!-- Whole NVMe drive: installs to it like bare metal. -->\n" + pci_hostdev(c["nvme"], boot=1)
+    else:
+        bus = "sata" if win else "virtio"   # Windows Setup sees SATA without extra drivers
+        dev = "sdc" if win else "vda"
         storage = f"""    <disk type="file" device="disk">
       <driver name="qemu" type="qcow2" cache="none" io="native" discard="unmap"/>
-      <source file="{disk}"/>
-      <target dev="vda" bus="virtio"/>
+      <source file="{c['disk']}"/>
+      <target dev="{dev}" bus="{bus}"/>
       <boot order="1"/>
     </disk>"""
+    cds = ""
+    if c["media"]:
+        cds += f"""    <!-- Installer, after the disk in the boot order (so a stray key doesn't rerun setup). -->
+    <disk type="file" device="cdrom">
+      <driver name="qemu" type="raw"/>
+      <source file="{c['media']}"/>
+      <target dev="sda" bus="sata"/>
+      <readonly/>
+      <boot order="2"/>
+    </disk>"""
+    if c["virtio"]:
+        cds += f"""
+    <disk type="file" device="cdrom">
+      <driver name="qemu" type="raw"/>
+      <source file="{c['virtio']}"/>
+      <target dev="sdb" bus="sata"/>
+      <readonly/>
+    </disk>"""
+    q = c["quirks"]
+    hostdevs = ""
+    if c["pci"]:
+        slot0 = c["pci"][0]["addr"].rsplit(".", 1)[0]
+        parts = []
+        for i, d in enumerate(c["pci"]):
+            same = d["addr"].rsplit(".", 1)[0] == slot0
+            parts.append(pci_hostdev(d, guest_bus="0x06" if same and c["gfx"] == "passthrough" else None,
+                                     alias="ua-gpu0" if i == 0 else None, rom=q.get("rom") if i == 0 else None))
+        hostdevs = "    <!-- GPU (+ its other functions) as one multifunction device, like real hardware. -->\n" + "\n".join(parts)
+    # Display
+    if c["lg"]:
+        graphics = """    <!-- SPICE (localhost): Looking Glass sends keyboard/mouse, clipboard, audio and mic. -->
+    <graphics type="spice" autoport="yes">
+      <listen type="address" address="127.0.0.1"/>
+      <image compression="off"/>
+      <gl enable="no"/>
+    </graphics>"""
+        video = '<model type="none"/>'
+    elif c["gfx"] == "virgl" and c["rendernode"]:
+        graphics = f"""    <!-- Local-only SPICE with OpenGL: the guest's 3D runs on this PC's GPU (VirGL). -->
+    <graphics type="spice">
+      <listen type="none"/>
+      <gl enable="yes" rendernode="{c['rendernode']}"/>
+    </graphics>"""
+        video = '<model type="virtio" heads="1" primary="yes">\n        <acceleration accel3d="yes"/>\n      </model>'
     else:
-        storage = "    <!-- Whole NVMe controller: Windows installs to it like bare metal. -->\n" + pci_hostdev(nvme["addr"], boot=1)
-    gpus = ""
-    if gpu:
-        gpus = "    <!-- GPU (+ its audio etc.) as one multifunction device, like on real hardware. -->\n"
-        gpus += "\n".join(pci_hostdev(d["addr"], guest=("0x06",) if d["addr"].rsplit(".", 1)[0] == gpu[0]["addr"].rsplit(".", 1)[0] else None)
-                          for d in gpu)
-    video = '<model type="none"/>' if lg else '<model type="virtio" heads="1" primary="yes"/>'
-    shm = ""
-    if lg:
-        size = mb * 1024 * 1024
-        dev = json.dumps({"driver": "ivshmem-plain", "id": "shmem0", "memdev": "looking-glass"}).replace('"', "&quot;")
+        graphics = """    <graphics type="spice">
+      <listen type="none"/>
+    </graphics>"""
+        video = '<model type="virtio" heads="1" primary="yes"/>'
+    qemu = ""
+    args = []
+    if c["lg"]:
+        size = c["mb"] * 1024 * 1024
+        dev = json.dumps({"driver": "ivshmem-plain", "id": "shmem0", "memdev": "looking-glass"})
         obj = json.dumps({"qom-type": "memory-backend-file", "id": "looking-glass", "mem-path": "/dev/kvmfr0",
-                          "size": size, "share": True}).replace('"', "&quot;")
-        shm = f"""  <!-- Looking Glass shared framebuffer via the kvmfr module ({mb} MiB, /etc/modprobe.d/kvmfr.conf). -->
-  <qemu:commandline>
-    <qemu:arg value="-device"/>
-    <qemu:arg value="{dev}"/>
-    <qemu:arg value="-object"/>
-    <qemu:arg value="{obj}"/>
-  </qemu:commandline>
+                          "size": size, "share": True})
+        args += ["-device", dev, "-object", obj]
+    if q.get("battery"):
+        args += ["-acpitable", f"file={q['battery']}"]
+    if args:
+        esc = lambda s: s.replace("&", "&amp;").replace('"', "&quot;")
+        qemu += "  <qemu:commandline>\n" + "".join(f'    <qemu:arg value="{esc(a)}"/>\n' for a in args) + "  </qemu:commandline>\n"
+    if q.get("subvendor"):
+        qemu += f"""  <!-- Laptop GPU: its driver checks for the laptop's own subsystem IDs. -->
+  <qemu:override>
+    <qemu:device alias="ua-gpu0">
+      <qemu:frontend>
+        <qemu:property name="x-pci-sub-vendor-id" type="unsigned" value="{q['subvendor']}"/>
+        <qemu:property name="x-pci-sub-device-id" type="unsigned" value="{q['subdevice']}"/>
+      </qemu:frontend>
+    </qemu:device>
+  </qemu:override>
 """
-    return f"""<!--
-  Windows 11 VM made by lgtm-vm create. Edit with: lgtm-vm edit
-  Activation identity: Windows ties its digital license to a hardware fingerprint. Keep
-  these as they are, or a rebuilt VM looks like a new PC and asks to activate again:
-    <uuid> (SMBIOS system UUID), machine="{machine_type()}" (pinned, not plain "q35"),
-    and the network card's <mac address>.
--->
-<domain type="kvm" xmlns:qemu="http://libvirt.org/schemas/domain/qemu/1.0">
-  <name>{name}</name>
-  <uuid>{u}</uuid>
-  <metadata>
-    <!-- lgtm-tuning hook: hugepages + keep the host off the VM's cores while it runs. -->
-    <lgtm:vm xmlns:lgtm="{NS}" tuning="yes" lookingglass="{'yes' if lg else 'no'}"/>
-  </metadata>
-  <memory unit="GiB">{mem}</memory>
-  <currentMemory unit="GiB">{mem}</currentMemory>
-  <memoryBacking>
-    <hugepages/>
-    <source type="memfd"/>
-    <access mode="shared"/>
-  </memoryBacking>
-  <vcpu placement="static">{len(vcpus)}</vcpu>
-  <cputune>
-{pins}
-    <emulatorpin cpuset="{emu}"/>
-  </cputune>
-  <os firmware="efi">
-    <type arch="x86_64" machine="{machine_type()}">hvm</type>
-    <!-- Windows 11 needs Secure Boot-capable UEFI + TPM, not pre-enrolled keys. -->
-    <firmware>
-      <feature enabled="yes" name="secure-boot"/>
-    </firmware>
-  </os>
-  <features>
-    <acpi/>
-    <apic/>
-    <hyperv mode="custom">
+    hyperv = """    <hyperv mode="custom">
       <relaxed state="on"/>
       <vapic state="on"/>
       <spinlocks state="on" retries="8191"/>
@@ -426,18 +733,53 @@ def domain_xml(name, mem, vm_cores, host_cores, threads, gpu, nvme, disk, win_is
       <tlbflush state="on"/>
       <ipi state="on"/>
     </hyperv>
-    <smm state="on"/>
+""" if win else ""
+    hugepages = "    <hugepages/>\n" if fast else ""
+    tpm = """    <tpm model="tpm-crb">
+      <backend type="emulator" version="2.0"/>
+    </tpm>
+""" if win else ""
+    return f"""<!--
+  {c['name']}: made by lgtm-vm. Edit with: lgtm-vm edit {c['name']}
+  Keep <uuid>, machine="{mt}" and the <mac address> as they are: Windows ties its activation
+  to them, so a rebuilt VM with the same values stays activated.
+-->
+<domain type="kvm" xmlns:qemu="http://libvirt.org/schemas/domain/qemu/1.0">
+  <name>{c['name']}</name>
+  <uuid>{u}</uuid>
+  <metadata>
+    <!-- lgtm-tuning hook: with tuning="yes", hugepages + host kept off the VM's cores. -->
+    <lgtm:vm xmlns:lgtm="{NS}" tuning="{'yes' if fast else 'no'}" graphics="{c['gfx']}" lookingglass="{'yes' if c['lg'] else 'no'}"/>
+  </metadata>
+  <memory unit="GiB">{c['mem']}</memory>
+  <currentMemory unit="GiB">{c['mem']}</currentMemory>
+  <memoryBacking>
+{hugepages}    <source type="memfd"/>
+    <access mode="shared"/>
+  </memoryBacking>
+  <vcpu placement="static">{vcpu_n}</vcpu>
+{cputune}
+  <os firmware="efi">
+    <type arch="x86_64" machine="{mt}">hvm</type>
+    <firmware>
+      <feature enabled="{'yes' if win else 'no'}" name="secure-boot"/>
+    </firmware>
+  </os>
+  <features>
+    <acpi/>
+    <apic/>
+{hyperv}    <smm state="on"/>
     <ioapic driver="kvm"/>
   </features>
   <cpu mode="host-passthrough" check="none" migratable="off">
-    <topology sockets="1" dies="1" clusters="1" cores="{len(vm_cores)}" threads="{threads}"/>
+    <topology sockets="1" dies="1" clusters="1" {topo}/>
     <cache mode="passthrough"/>
   </cpu>
-  <clock offset="localtime">
+  <clock offset="{'localtime' if win else 'utc'}">
     <timer name="rtc" tickpolicy="catchup"/>
     <timer name="pit" tickpolicy="delay"/>
     <timer name="hpet" present="no"/>
-    <timer name="hypervclock" present="yes"/>
+    {'<timer name="hypervclock" present="yes"/>' if win else ''}
   </clock>
   <on_poweroff>destroy</on_poweroff>
   <on_reboot>restart</on_reboot>
@@ -449,53 +791,22 @@ def domain_xml(name, mem, vm_cores, host_cores, threads, gpu, nvme, disk, win_is
   <devices>
     <emulator>/usr/bin/qemu-system-x86_64</emulator>
 {storage}
-    <!-- Installer media, after the disk in the boot order: first, a key pressed at
-         "Press any key to boot from CD" would start Windows Setup again. -->
-    <disk type="file" device="cdrom">
-      <driver name="qemu" type="raw"/>
-      <source file="{win_iso}"/>
-      <target dev="sda" bus="sata"/>
-      <readonly/>
-      <boot order="2"/>
-    </disk>
-    <disk type="file" device="cdrom">
-      <driver name="qemu" type="raw"/>
-      <source file="{virtio}"/>
-      <target dev="sdb" bus="sata"/>
-      <readonly/>
-    </disk>
-{gpus}
+{cds}
+{hostdevs}
 {fs}
     <controller type="usb" model="qemu-xhci" ports="15"/>
     <controller type="sata" index="0"/>
     <controller type="pci" model="pcie-root"/>
-    <!-- Spare root ports so devices can be hot-plugged into the running VM. -->
-    <controller type="pci" model="pcie-root-port"/>
-    <controller type="pci" model="pcie-root-port"/>
-    <controller type="pci" model="pcie-root-port"/>
-    <controller type="pci" model="pcie-root-port"/>
-    <controller type="pci" model="pcie-root-port"/>
-    <controller type="pci" model="pcie-root-port"/>
-    <controller type="pci" model="pcie-root-port"/>
-    <controller type="pci" model="pcie-root-port"/>
-    <controller type="pci" model="pcie-root-port"/>
-    <controller type="pci" model="pcie-root-port"/>
+{chr(10).join('    <controller type="pci" model="pcie-root-port"/>' for _ in range(10))}
     <interface type="network">
       <mac address="{mac}"/>
       <source network="default"/>
       <model type="virtio"/>
     </interface>
+    <input type="tablet" bus="virtio"/>
     <input type="mouse" bus="virtio"/>
     <input type="keyboard" bus="virtio"/>
-    <input type="mouse" bus="ps2"/>
-    <input type="keyboard" bus="ps2"/>
-    <!-- SPICE (localhost only): Looking Glass sends keyboard/mouse, clipboard, audio and
-         microphone through it. virt-viewer still works as a fallback console. -->
-    <graphics type="spice" port="5900" autoport="no">
-      <listen type="address" address="127.0.0.1"/>
-      <image compression="off"/>
-      <gl enable="no"/>
-    </graphics>
+{graphics}
     <channel type="spicevmc">
       <target type="virtio" name="com.redhat.spice.0"/>
     </channel>
@@ -506,69 +817,196 @@ def domain_xml(name, mem, vm_cores, host_cores, threads, gpu, nvme, disk, win_is
     <video>
       {video}
     </video>
-    <tpm model="tpm-crb">
-      <backend type="emulator" version="2.0"/>
-    </tpm>
-    <memballoon model="none"/>
+{tpm}    <memballoon model="none"/>
   </devices>
-{shm}</domain>
+{qemu}</domain>
 """
 
 
-# --- run --------------------------------------------------------------------------
+# --- running --------------------------------------------------------------------------
 
-def state(name):
-    out = virsh("domstate", name, check=False)
-    return out.splitlines()[0] if out else ""
+def holders(addrs):
+    """Processes that have a passed-through GPU open (they'd block or crash the handover)."""
+    nodes = set()
+    for a in addrs:
+        for p in glob.glob(f"/dev/dri/by-path/pci-{a}-*"):
+            nodes.add(os.path.realpath(p))
+        if pci(a)["driver"] == "nvidia":
+            nodes |= {p for p in glob.glob("/dev/nvidia[0-9]*")}
+    found = set()
+    for fd in glob.glob("/proc/[0-9]*/fd/*"):
+        try:
+            if os.readlink(fd) in nodes:
+                pid = fd.split("/")[2]
+                found.add(f"{read(f'/proc/{pid}/comm')} (pid {pid})")
+        except OSError:
+            pass
+    return sorted(found)
 
 
-def uses_lg(name):
-    return "/dev/kvmfr0" in virsh("dumpxml", "--inactive", name, check=False)
-
-
-def open_vm():
-    name = default_name()
-    if not shutil.which("virsh"):
-        die("the Windows VM tools aren't installed: run lgtm-setup windows-vm")
+def open_vm(name):
+    need_tools(["open", name])
     if not virsh("dominfo", name, check=False):
-        return create()
+        die(f"no VM named {name} (lgtm-vm list)")
+    m = meta(name)
     if state(name) != "running":
-        notify("Windows", "Starting…")
+        busy = holders(m.get("pci", []))
+        if busy:
+            die("the GPU is still in use by: " + ", ".join(busy) +
+                ". Close those (or log out and back in: the desktop lets go of reserved GPUs).")
+        if m.get("lg") and any(meta(o).get("lg") and state(o) == "running" for o in my_vms() if o != name):
+            die("another Looking Glass VM is running (one at a time); stop it first")
+        notify(m.get("label", name), "Starting…")
         virsh("start", name)
-    if uses_lg(name):
+    if m.get("lg"):
         for _ in range(50):
             if os.access("/dev/kvmfr0", os.R_OK):
                 break
             time.sleep(0.1)
         else:
             die("/dev/kvmfr0 isn't readable: restart, or log out and in (kvm group)")
-        args = ["looking-glass-client", "-C", LG_INI]
+        port = re.search(r":(\d+)", virsh("domdisplay", "--type", "spice", name, check=False) or "")
+        args = ["looking-glass-client", "-C", LG_INI, f"win:title={m.get('label', name)}"]
+        if port:
+            args.append(f"spice:port={port[1]}")
         os.execvp(args[0], args)
     os.execvp("virt-viewer", ["virt-viewer", "-c", CONN, "--attach", "--wait", "--reconnect", name])
 
 
+def default_open():
+    vms = my_vms()
+    if not vms:
+        return new([])
+    if len(vms) == 1:
+        return open_vm(vms[0])
+    labels = [f"{meta(v).get('label', v)}  ({v}, {state(v) or 'stopped'})" for v in vms] + ["New virtual machine…"]
+    if sys.stdin.isatty():
+        i = choose("Virtual machines:", [(l, None, True) for l in labels], 1)
+    else:
+        r = subprocess.run(["fuzzel", "--dmenu", "--index", "--prompt", "VM  ", "--lines", str(len(labels))],
+                           input="\n".join(labels), capture_output=True, text=True)
+        if r.returncode != 0 or not r.stdout.strip().isdigit():
+            return
+        i = int(r.stdout)
+    return new([]) if i == len(vms) else open_vm(vms[i])
+
+
+def report_gpus():
+    print(f"IOMMU: {'on' if iommu_on() else 'OFF (lgtm-setup vm, restart, enable VT-d/AMD-Vi in firmware)'}")
+    for g in gpus():
+        role = "draws the desktop" if g["host_display"] else ("reserved for VMs" if g["addr"] in read(RESERVED).split() else "free")
+        print(f"\n{g['addr']}  {g['name']}\n  {role}; driver {g['driver'] or 'none'}; IOMMU group {g['group']}; "
+              f"{g['outputs']} display outputs")
+        if g["render_only"]:
+            print("  Laptop render-only GPU: can be passed through while the other GPU keeps the desktop.")
+        if g["laptop_nvidia"]:
+            print("  NVIDIA laptop GPU: lgtm-vm adds a fake battery and the laptop's subsystem IDs.\n"
+                  "  If Windows reports Code 43, it also needs the vBIOS: extract it from the laptop's\n"
+                  f"  firmware update (e.g. with VBiosFinder) and save it as {LIB}/{g['addr'].replace(':', '_')}.rom,\n"
+                  "  then recreate the VM.")
+        if g["sriov_total"]:
+            print(f"  SR-IOV: up to {g['sriov_total']} slices; {len(g['vfs'])} active"
+                  f"{'' if g['vfs'] else ' (lgtm-vm share-gpu on)'}")
+    print("\nFor Windows, the wizard tries: spare GPU passthrough > Intel GPU slice > plain display.")
+    print("For Linux: spare GPU passthrough > Intel GPU slice > 3D virtual GPU (VirGL) > plain display.")
+
+
+def share_gpu(onoff):
+    intel = [g for g in gpus() if g["vendor"] == "0x8086" and g["sriov_total"]]
+    if not intel:
+        die("no Intel GPU with SR-IOV here (needs 11th gen Core or newer)")
+    g = intel[0]
+    in_terminal(["share-gpu", onoff])
+    grub = "/etc/default/grub"
+    params = "intel_iommu=on iommu=pt i915.enable_guc=3 i915.max_vfs=7 module_blacklist=xe"
+    if onoff == "on":
+        print("Splitting the Intel GPU (SR-IOV) uses the out-of-tree i915-sriov-dkms driver: it's")
+        print("experimental and can break on kernel updates until it catches up.")
+        if not yes("Continue?", "n"):
+            return
+        lst = os.path.join(CACHE, "sriov.packages")
+        os.makedirs(CACHE, exist_ok=True)
+        with open(lst, "w") as f:
+            f.write("dkms\nlinux-zen-headers\naur:i915-sriov-dkms\n")
+        subprocess.run(["lgtm-pkg", lst], check=True)
+        sudo("sh", "-c", f"""set -e
+grep -q 'i915.max_vfs' {grub} || sed -i -E 's/^(GRUB_CMDLINE_LINUX_DEFAULT="[^"]*)"/\\1 {params}"/' {grub}
+echo '{g['addr']} 2' > {SRIOV_CONF}
+systemctl enable lgtm-sriov.service
+mkinitcpio -P >/dev/null
+grub-mkconfig -o /boot/grub/grub.cfg >/dev/null 2>&1""")
+        print("Done. Restart; then `lgtm-vm new` offers a slice of the Intel GPU (2 slices; edit /etc/lgtm/sriov for more).")
+    else:
+        sudo("sh", "-c", f"""sed -i -E 's/ ?{params}//' {grub}; rm -f {SRIOV_CONF}
+systemctl disable lgtm-sriov.service 2>/dev/null; grub-mkconfig -o /boot/grub/grub.cfg >/dev/null 2>&1""")
+        print("Turned off; restart to apply. (The i915-sriov-dkms package stays; remove with pacman -R.)")
+
+
+def delete(name):
+    if not virsh("dominfo", name, check=False):
+        die(f"no VM named {name}")
+    if not yes(f"Delete {name}? Its disk is kept unless you say so next", "n"):
+        return
+    m = meta(name)
+    if state(name) == "running":
+        virsh("destroy", name, check=False)
+    virsh("undefine", name, "--nvram", "--tpm", check=False) or virsh("undefine", name, "--nvram", check=False)
+    disk = f"{IMAGES}/{name}.qcow2"
+    if os.path.exists(disk) and yes(f"Also delete its disk {disk}?", "n"):
+        sudo("rm", "-f", disk)
+    sudo("rm", "-f", f"{IMAGES}/{name}-install.iso", check=False)
+    for f in (os.path.join(STATE, f"{name}.json"), os.path.join(APPS, f"lgtm-vm-{name}.desktop")):
+        try:
+            os.remove(f)
+        except OSError:
+            pass
+    still = used_addrs()
+    keep = [a for a in read(RESERVED).split() if a in still]
+    if keep != read(RESERVED).split():
+        sudo("sh", "-c", f"echo {' '.join(keep)} > {RESERVED}" if keep else f"rm -f {RESERVED}")
+    print(f"Deleted {name}. (Definition kept in {STATE}/{name}.xml for activation.)")
+
+
 def main():
-    cmd = sys.argv[1] if len(sys.argv) > 1 else "open"
-    name = default_name()
-    if cmd in ("open", "start"):
-        open_vm()
-    elif cmd == "create":
-        create()
+    a = sys.argv[1:]
+    cmd = a[0] if a else ""
+    name = a[1] if len(a) > 1 else (my_vms()[0] if len(my_vms()) == 1 else None)
+    if cmd == "":
+        default_open()
+    elif cmd in ("new", "create"):
+        new(a[1:])
+    elif cmd in ("open", "start"):
+        open_vm(name or die("which VM? (lgtm-vm list)"))
     elif cmd == "stop":
-        virsh("shutdown", name)
-    elif cmd == "status":
-        print(state(name) or "not created")
+        virsh("shutdown", name or die("which VM?"))
+    elif cmd == "list":
+        for v in my_vms():
+            m = meta(v)
+            print(f"{v:16} {state(v) or 'stopped':10} {m.get('label', '')}  [{m.get('gfx', '')}]")
     elif cmd == "edit":
-        os.execvp("virsh", ["virsh", "-c", CONN, "edit", name])
-    elif cmd == "--xml-test":   # development: print a sample definition
+        os.execvp("virsh", ["virsh", "-c", CONN, "edit", name or die("which VM?")])
+    elif cmd == "delete":
+        delete(name or die("which VM?"))
+    elif cmd == "gpus":
+        report_gpus()
+    elif cmd == "share-gpu" and len(a) > 1 and a[1] in ("on", "off"):
+        share_gpu(a[1])
+    elif cmd == "--xml-test":   # development: print a definition for this PC without creating it
+        kind, gfx = (a[1] if len(a) > 1 else "windows"), (a[2] if len(a) > 2 else "passthrough")
         cs = cores()
-        print(domain_xml("win11", 16, cs[-4:], cs[:-4], len(cs[0]),
-                         [{"addr": "0000:0d:00.0"}, {"addr": "0000:0d:00.1"}], None,
-                         f"{IMAGES}/win11.qcow2", f"{IMAGES}/win11-install.iso", f"{IMAGES}/virtio-win.iso",
-                         ["Documents"], True, kvmfr_mb(monitor_pixels())))
+        g = next((o[4] for o in graphics_options(kind) if o[0] == gfx and o[4]), None)
+        pdevs = [g] if g else []
+        print(domain_xml(dict(name="test", kind=kind, mem=8, vm_cores=cs[-2:] if pdevs else [], host_cores=cs[:-2] if pdevs else cs,
+                              gfx=gfx if (pdevs or gfx in ("virgl", "virtual")) else "virtual", pci=pdevs, nvme=None,
+                              disk=f"{IMAGES}/test.qcow2", media=f"{IMAGES}/test-install.iso",
+                              virtio=f"{IMAGES}/virtio-win.iso" if kind == "windows" else None, shares=["Documents"],
+                              lg=bool(pdevs) and kind == "windows", mb=kvmfr_mb(monitor_pixels()),
+                              quirks=({"subvendor": int(g["subvendor"], 16), "subdevice": int(g["subdevice"], 16),
+                                       "battery": f"{LIB}/battery.aml"} if g and g.get("laptop_nvidia") else {}),
+                              rendernode=render_node(), ncores=2)))
     else:
         print(__doc__.strip())
-        return 0 if cmd in ("-h", "--help") else 2
+        return 0 if cmd in ("-h", "--help", "help") else 2
     return 0
 
 

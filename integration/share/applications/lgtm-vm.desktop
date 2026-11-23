@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=Virtual Machines
+GenericName=Windows, Linux and other OSes in a window
+Comment=Run another OS: pick one, it's downloaded and set up for this PC
+Exec=lgtm-vm
+Icon=computer
+Categories=System;Emulator;
+Keywords=windows;vm;virtual machine;looking glass;qemu;ubuntu;fedora;iso;
+Actions=new;
+
+[Desktop Action new]
+Name=New virtual machine
+Exec=lgtm-vm new

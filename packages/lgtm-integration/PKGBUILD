@@ -45,7 +45,7 @@ package() {
   ln -s themes/aurora/wallpaper.png "$pkgdir/usr/share/lgtm/wallpaper.png"
   local t="$pkgdir/usr/share/plymouth/themes/lgtm"
   install -Dm644 -t "$t" "$s"/share/plymouth/lgtm/lgtm.{plymouth,script} "$srcdir"/{logo,dot,entry}.png
-  install -Dm644 -t "$pkgdir/usr/share/applications" "$s"/share/applications/lgtm-{exe,apk,android,install,open,windows,setup,theme}.desktop
+  install -Dm644 -t "$pkgdir/usr/share/applications" "$s"/share/applications/lgtm-{exe,apk,android,install,open,vm,pod,setup,theme}.desktop
   install -Dm644 "$s/share/applications/lgtm-session.desktop" "$pkgdir/usr/share/wayland-sessions/lgtm.desktop"
   install -Dm644 -t "$pkgdir/usr/lib/binfmt.d" "$s"/binfmt.d/*.conf
   install -Dm644 -t "$pkgdir/usr/lib/sysctl.d" "$s"/sysctl.d/*.conf

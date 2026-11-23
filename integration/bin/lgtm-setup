@@ -2,7 +2,7 @@
 # lgtm-setup: turn this LGTM OS machine into a gaming PC, a Windows VM host, a dev box...
 #
 #   lgtm-setup                 list setup profiles (✓ = done)
-#   lgtm-setup NAME...         set up those profiles (gaming, windows-vm, dev, ...)
+#   lgtm-setup NAME...         set up those profiles (gaming, vm, dev, ...)
 #   lgtm-setup --pick          choose from a menu
 #   lgtm-setup --first-login   (desktop autostart) finish what the installer queued
 #

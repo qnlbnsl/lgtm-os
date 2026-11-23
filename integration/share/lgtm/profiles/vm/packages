@@ -1,0 +1,19 @@
+# Virtual machines (lgtm-vm).
+qemu-full
+libvirt
+edk2-ovmf
+swtpm
+dnsmasq
+virt-manager
+virt-viewer
+dkms
+linux-zen-headers
+usbutils
+pciutils
+acpica
+jq
+# quickget: downloads Windows from Microsoft and ~100 other OSes from their own servers.
+aur:quickemu
+# Looking Glass B8: its virtual display driver (IDD) needs no dummy plug, which laptop
+# GPUs (no ports) require. B8 is a release candidate; the Windows side must also be B8.
+aur:looking-glass-rc looking-glass-rc looking-glass-rc-module-dkms

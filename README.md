@@ -50,8 +50,14 @@ Boot is quiet: GRUB hidden, Plymouth splash with the LGTM logo.
 | Profile | What you get |
 |---|---|
 | `gaming` | Steam, Heroic (Epic/GOG), Lutris, GameMode, MangoHud, Gamescope, Vulkan drivers for your GPU. Games use the bundled GE-Proton. |
-| `windows-vm` | Windows 11 with your second GPU passed through, shown fullscreen via Looking Glass. `lgtm-vm create` sizes it for your PC: pinned cores, hugepages, NVMe or virtual disk, shared folders. |
+| `vm` | Virtual machines with `lgtm-vm`: pick Windows 11, Ubuntu, Fedora, ... (or paste an ISO link) and it's downloaded and sized for your PC. With a spare GPU, including a laptop's NVIDIA/AMD GPU, Windows runs at full speed through Looking Glass, no dummy plug. |
 | `dev` | git, GitHub CLI, Node, uv, Go, Rust, ripgrep/fd/fzf, Docker-compatible podman. AI agents install from the dock on first use. |
+
+Virtual machines pick the best graphics this PC allows, in order: pass through a spare
+GPU, a slice of the Intel GPU (SR-IOV, experimental), a 3D virtual GPU (Linux guests),
+then a plain virtual display. `lgtm-vm gpus` explains the choice. Containers for other
+distros: `lgtm-pod new`, then `lgtm-pod install <pod> <package>` puts the app in the menu.
+The underlying tools (virsh, virt-manager, distrobox, podman) still work on everything.
 
 Profiles and themes are plain folders (`/usr/share/lgtm/profiles`, `/usr/share/lgtm/themes`)
 with a `packages` list; AUR entries are built on the machine when needed.

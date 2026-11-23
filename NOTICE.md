@@ -43,8 +43,8 @@ Main components:
 | Plymouth, ReGreet, cage, keyd | Boot splash, login screen, ⌘ key remapping | GPL-2.0-or-later, GPL-3.0-or-later, MIT, MIT |
 
 Installed only when a setup profile is chosen (downloaded on the user's machine, not part
-of the image): QEMU (GPL-2.0), libvirt (LGPL-2.1-or-later), Looking Glass
-(GPL-2.0-or-later, built from the AUR), Lutris (GPL-3.0), Heroic (GPL-3.0), GameMode
+of the image): QEMU (GPL-2.0), libvirt (LGPL-2.1-or-later), quickemu/quickget (MIT), Looking Glass
+(GPL-2.0-or-later, built from the AUR), i915-sriov-dkms (GPL-2.0, only if chosen), Lutris (GPL-3.0), Heroic (GPL-3.0), GameMode
 (BSD-3-Clause), MangoHud (MIT), Gamescope (BSD-2-Clause), and Steam, which is proprietary
 software from Valve distributed by Arch Linux under Valve's own license.
 

@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=Containers
+GenericName=Other Linux distros
+Comment=Ubuntu, Fedora, Arch... as containers whose apps appear in the menu
+Exec=lgtm-pod
+Icon=utilities-terminal
+Categories=System;
+Keywords=container;distrobox;podman;pod;ubuntu;debian;fedora;arch;
+Actions=new;
+
+[Desktop Action new]
+Name=New container
+Exec=lgtm-pod new

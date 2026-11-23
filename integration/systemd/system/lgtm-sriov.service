@@ -1,0 +1,16 @@
+[Unit]
+Description=LGTM OS: split the Intel GPU into slices for VMs (SR-IOV)
+Documentation=man:lgtm-vm
+ConditionPathExists=/etc/lgtm/sriov
+After=systemd-modules-load.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# /etc/lgtm/sriov: "<pci address> <slices>". The host doesn't claim the slices, so
+# libvirt can hand them to VMs.
+ExecStart=/bin/sh -c 'read addr n < /etc/lgtm/sriov; d=/sys/bus/pci/devices/$addr; echo 0 > $d/sriov_drivers_autoprobe; echo $n > $d/sriov_numvfs'
+ExecStop=/bin/sh -c 'read addr n < /etc/lgtm/sriov; echo 0 > /sys/bus/pci/devices/$addr/sriov_numvfs'
+
+[Install]
+WantedBy=multi-user.target

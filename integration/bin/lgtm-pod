@@ -1,0 +1,181 @@
+#!/usr/bin/env bash
+# lgtm-pod: other Linux distros as containers that feel built in (distrobox + rootless podman).
+#
+#   lgtm-pod                       choose a pod to open (or make a new one)
+#   lgtm-pod new [NAME] [DISTRO]   wizard: ubuntu, debian, fedora, arch, alpine, opensuse,
+#                                  kali, or any image (docker.io/..., ghcr.io/...)
+#   lgtm-pod enter NAME            a terminal inside NAME
+#   lgtm-pod run NAME CMD...       run one command inside
+#   lgtm-pod install NAME PKG...   install packages with the distro's own package manager;
+#                                  their apps appear in the LGTM OS menu automatically
+#   lgtm-pod export NAME APP       put an app (or a command, with --bin) from NAME in the menu
+#   lgtm-pod list                  pods and what they run
+#   lgtm-pod rm NAME               delete NAME and its menu entries
+#   lgtm-pod upgrade [NAME]        update packages in one pod or all
+#
+# Pods share your home folder, display, sound and GPU, so their apps behave like native
+# ones. Nothing runs in the background: a pod starts when used. The plain tools work on
+# the same pods: distrobox, podman. (.deb/.rpm files opened from Files use the
+# lgtm-ubuntu / lgtm-fedora pods; see lgtm-open.)
+set -euo pipefail
+
+APPS=${XDG_DATA_HOME:-$HOME/.local/share}/applications
+PODHOMES=${XDG_DATA_HOME:-$HOME/.local/share}/lgtm/pods
+
+die() { echo "lgtm-pod: $*" >&2; command -v notify-send >/dev/null && [[ ! -t 0 ]] && notify-send -a "LGTM OS" "Containers" "$*" 2>/dev/null; exit 1; }
+ask() { local p=$1 d=${2:-}; read -rp "$p${d:+ [$d]}: " REPLY; REPLY=${REPLY:-$d}; }
+yes() { ask "$1 (y/n)" "${2:-y}"; [[ ${REPLY,,} == y* ]]; }
+pods() { podman ps -a --format '{{.Names}}' --filter label=manager=distrobox 2>/dev/null | sort; }
+exists() { pods | grep -qxF "$1"; }
+in_terminal() {
+  [[ -t 0 ]] && return 0
+  exec foot --app-id=lgtm.pod --title="Containers" -e bash -c "$(printf '%q ' lgtm-pod "$@"); echo; read -rp 'Press Enter to close' _"
+}
+
+image_of() {
+  case $1 in
+    ubuntu)   echo docker.io/library/ubuntu:24.04 ;;
+    debian)   echo docker.io/library/debian:stable ;;
+    fedora)   echo registry.fedoraproject.org/fedora:latest ;;
+    arch)     echo docker.io/library/archlinux:latest ;;
+    alpine)   echo docker.io/library/alpine:latest ;;
+    opensuse) echo registry.opensuse.org/opensuse/tumbleweed:latest ;;
+    kali)     echo docker.io/kalilinux/kali-rolling:latest ;;
+    */*)      echo "$1" ;;
+    *)        return 1 ;;
+  esac
+}
+
+# The distro's package manager, as "install command" inside the pod.
+pkg_cmd() {
+  distrobox enter --no-tty "$1" -- sh -c '
+    if command -v apt-get >/dev/null; then echo "sudo apt-get install -y"
+    elif command -v dnf >/dev/null; then echo "sudo dnf install -y"
+    elif command -v pacman >/dev/null; then echo "sudo pacman -S --needed --noconfirm"
+    elif command -v zypper >/dev/null; then echo "sudo zypper --non-interactive install"
+    elif command -v apk >/dev/null; then echo "sudo apk add"
+    else echo ""; fi' 2>/dev/null | tail -1
+}
+
+desktop_files() { distrobox enter --no-tty "$1" -- sh -c 'ls /usr/share/applications/*.desktop 2>/dev/null' 2>/dev/null | sort; }
+
+export_new_apps() {  # export_new_apps POD BEFORE-LIST
+  local pod=$1 before=$2 f app n=0
+  while read -r f; do
+    [[ -n $f ]] || continue
+    grep -qxF "$f" <<<"$before" && continue
+    # Skip entries that aren't meant for menus.
+    distrobox enter --no-tty "$pod" -- grep -qiE '^(NoDisplay|Hidden)=true' "$f" 2>/dev/null && continue
+    app=$(basename "$f" .desktop)
+    distrobox enter --no-tty "$pod" -- distrobox-export --app "$app" >/dev/null 2>&1 && { echo "  in the menu: $app"; n=$((n+1)); }
+  done < <(desktop_files "$pod")
+  (( n )) || echo "  (no new apps to add to the menu; commands: lgtm-pod export $pod CMD --bin)"
+}
+
+new() {
+  in_terminal new "$@"
+  local name=${1:-} distro=${2:-} image
+  if [[ -z $distro ]]; then
+    cat <<'EOF'
+
+  New container (pod)
+    1) Ubuntu 24.04      4) Arch Linux        7) Kali Linux
+    2) Debian stable     5) Alpine            8) Any image (docker.io/..., ghcr.io/...)
+    3) Fedora            6) openSUSE Tumbleweed
+EOF
+    ask "Choose" 1
+    case $REPLY in
+      1) distro=ubuntu ;; 2) distro=debian ;; 3) distro=fedora ;; 4) distro=arch ;;
+      5) distro=alpine ;; 6) distro=opensuse ;; 7) distro=kali ;;
+      8) ask "Image"; distro=$REPLY ;;
+      *) die "invalid choice" ;;
+    esac
+  fi
+  image=$(image_of "$distro") || die "unknown distro '$distro' (or give an image like docker.io/library/ubuntu:24.04)"
+  if [[ -z $name ]]; then
+    local base; base=$(basename "${distro%%:*}"); name=$base; local n=2
+    while exists "$name"; do name=$base-$n; n=$((n+1)); done
+    ask "Name" "$name"; name=$REPLY
+  fi
+  [[ $name =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || die "invalid name"
+  exists "$name" && die "a pod named $name already exists"
+
+  local args=(--yes --name "$name" --image "$image")
+  if [[ -t 0 ]] && ! yes "Share your home folder with it? (n = a separate home, for experiments)" y; then
+    mkdir -p "$PODHOMES/$name"; args+=(--home "$PODHOMES/$name")
+  fi
+  # NVIDIA's proprietary driver needs its libraries mapped in; other GPUs just work.
+  [[ -e /proc/driver/nvidia/version ]] && args+=(--nvidia)
+  echo ">> creating $name from $image (first time downloads the image)"
+  distrobox create "${args[@]}"
+  echo ">> first start (sets up the pod)"
+  distrobox enter --no-tty "$name" -- true
+  distrobox generate-entry "$name" >/dev/null 2>&1 || true
+  echo
+  echo "Ready. It's in the menu as \"$name\" (a terminal inside it)."
+  echo "  Install apps:  lgtm-pod install $name PACKAGE...   (they appear in the menu)"
+  echo "  Open a shell:  lgtm-pod enter $name"
+}
+
+install_pkgs() {
+  local pod=$1; shift
+  (( $# )) || die "usage: lgtm-pod install NAME PACKAGE..."
+  exists "$pod" || die "no pod named $pod (lgtm-pod list)"
+  in_terminal install "$pod" "$@"
+  local cmd before
+  cmd=$(pkg_cmd "$pod"); [[ -n $cmd ]] || die "don't know $pod's package manager; use: lgtm-pod enter $pod"
+  before=$(desktop_files "$pod")
+  [[ $cmd == *apt-get* ]] && distrobox enter "$pod" -- sudo apt-get update -qq
+  # shellcheck disable=SC2086
+  distrobox enter "$pod" -- $cmd "$@"
+  export_new_apps "$pod" "$before"
+}
+
+remove() {
+  local pod=$1 f
+  exists "$pod" || die "no pod named $pod"
+  in_terminal rm "$pod"
+  yes "Delete pod $pod and its menu entries? (your files in ~ stay)" n || exit 0
+  # Menu entries distrobox exported from it ("<pod>-<app>.desktop") and its own launcher.
+  for f in "$APPS/$pod"-*.desktop "$APPS/$pod.desktop"; do [[ -e $f ]] && rm -f "$f"; done
+  distrobox rm --force "$pod" >/dev/null
+  distrobox generate-entry "$pod" --delete >/dev/null 2>&1 || true
+  [[ -d $PODHOMES/$pod ]] && yes "Also delete its separate home folder $PODHOMES/$pod?" n && rm -rf "${PODHOMES:?}/$pod"
+  echo "Deleted $pod."
+}
+
+pick() {
+  local list choice
+  list=$( { pods; echo "New container…"; } )
+  if [[ -t 0 ]]; then
+    local i=1 l; while read -r l; do echo "  $i) $l"; i=$((i+1)); done <<<"$list"
+    ask "Choose" 1; choice=$(sed -n "${REPLY}p" <<<"$list")
+  else
+    choice=$(fuzzel --dmenu --prompt "Pod  " --lines "$(wc -l <<<"$list")" <<<"$list") || exit 0
+  fi
+  case $choice in "") exit 0 ;; New*) new ;; *) enter "$choice" ;; esac
+}
+
+enter() {
+  exists "$1" || die "no pod named $1"
+  if [[ -t 0 ]]; then exec distrobox enter "$1"; fi
+  exec foot --app-id=lgtm.pod --title="$1" -e distrobox enter "$1"
+}
+
+case ${1:-} in -h|--help|help) ;; *) command -v distrobox >/dev/null || die "distrobox isn't installed" ;; esac
+case ${1:-} in
+  "") pick ;;
+  new) shift; new "$@" ;;
+  enter) enter "${2:?usage: lgtm-pod enter NAME}" ;;
+  run) shift; pod=${1:?usage: lgtm-pod run NAME CMD...}; shift; exec distrobox enter "$pod" -- "$@" ;;
+  install) shift; install_pkgs "$@" ;;
+  export) pod=${2:?usage: lgtm-pod export NAME APP [--bin]}; app=${3:?app or command}
+          if [[ ${4:-} == --bin ]]; then
+            distrobox enter --no-tty "$pod" -- distrobox-export --bin "$(distrobox enter --no-tty "$pod" -- sh -c "command -v $app")" --export-path "$HOME/.local/bin"
+          else distrobox enter --no-tty "$pod" -- distrobox-export --app "$app"; fi ;;
+  list|ls) podman ps -a --filter label=manager=distrobox --format '{{.Names}}\t{{.Status}}\t{{.Image}}' | column -t -s $'\t' ;;
+  rm|delete) remove "${2:?usage: lgtm-pod rm NAME}" ;;
+  upgrade) shift; if (( $# )); then distrobox upgrade "$@"; else distrobox upgrade --all; fi ;;
+  -h|--help|help) sed -n '2,21p' "$0" ;;
+  *) die "unknown command '$1' (lgtm-pod --help)" ;;
+esac
