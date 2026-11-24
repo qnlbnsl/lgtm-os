@@ -1,5 +1,7 @@
 [Unit]
 Description=Notice program crashes (inotify watch, no running process)
+# The crash-reports feature watches the journal instead (lgtm-crash-watch.service).
+ConditionPathExists=!/etc/lgtm/features/crash-reports
 
 [Path]
 PathChanged=/var/lib/systemd/coredump

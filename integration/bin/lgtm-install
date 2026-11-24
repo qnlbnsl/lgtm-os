@@ -81,21 +81,14 @@ EOF
 ask "Choose 1 or 2" "$([[ $keys == mac ]] && echo 2 || echo 1)"
 case $REPLY in 1) theme=aurora ;; 2) theme=macos-graphite ;; *) die "invalid choice" ;; esac
 
-# --- what's it for --------------------------------------------------------------
-echo
-echo "  What will you use this computer for? These are set up on first login (needs the"
-echo "  internet); you can add them later from the logo menu: Set up."
-profiles=()
-for d in /usr/share/lgtm/profiles/*/profile.conf; do
-  d=${d%/profile.conf}; profiles+=("${d##*/}")
-  printf '    %d) %s\n' ${#profiles[@]} "$(. "$d/profile.conf"; echo "$LABEL: $DESCRIPTION")"
-done
-ask "Numbers separated by spaces, or Enter for none" ""
-setup=()
-for n in $REPLY; do
-  [[ $n =~ ^[0-9]+$ && -n ${profiles[$((n-1))]:-} ]] || die "invalid choice: $n"
-  setup+=("${profiles[$((n-1))]}")
-done
+# --- what's it for (RAM calculator) ------------------------------------------------
+choices=$(mktemp)
+lgtm-feature --choose "$choices" || die "cancelled"
+features=() setup=()
+while read -r kind name; do
+  case $kind in features) features+=("$name") ;; profiles) setup+=("$name") ;; esac
+done < "$choices"
+rm -f "$choices"
 
 # --- encryption and login -------------------------------------------------------
 echo
@@ -207,6 +200,9 @@ fi
 lgtm-theme --default '$theme' >/dev/null
 # Setup profiles run at first login, in a terminal, once there's internet.
 if [[ -n '${setup[*]}' ]]; then echo '${setup[*]}' > /etc/lgtm/setup-pending; fi
+
+# Advanced features (lgtm-feature).
+if [[ -n '${features[*]}' ]]; then mkdir -p /etc/lgtm/features; (cd /etc/lgtm/features && touch ${features[*]}); fi
 
 # Login screen: graphical (ReGreet), only shown when not logging in automatically.
 {

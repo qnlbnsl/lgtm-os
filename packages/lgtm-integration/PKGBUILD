@@ -9,7 +9,8 @@ depends=(bash python file git pciutils wl-clipboard grim slurp swaylock keyd ply
          labwc wayfire waybar swaybg fuzzel foot thunar greetd greetd-tuigreet
          earlyoom zram-generator papirus-icon-theme inter-font wireplumber brightnessctl
          arch-install-scripts gptfdisk dosfstools e2fsprogs squashfs-tools)
-optdepends=('darling-bin: Mac programs (preview)'
+optdepends=('gdb: backtraces in crash reports'
+            'darling-bin: Mac programs (preview)'
             'whitesur-icon-theme: macOS Graphite theme icons'
             'apple_cursor: macOS Graphite theme cursor'
             'teams-for-linux-bin: Microsoft Teams')
@@ -60,6 +61,9 @@ package() {
   ln -s ../lgtm-apps-update.timer "$pkgdir/usr/lib/systemd/user/timers.target.wants/lgtm-apps-update.timer"
   install -d "$pkgdir/usr/lib/systemd/user/default.target.wants"
   ln -s ../lgtm-crash.path "$pkgdir/usr/lib/systemd/user/default.target.wants/lgtm-crash.path"
+  ln -s ../lgtm-crash-watch.service "$pkgdir/usr/lib/systemd/user/default.target.wants/lgtm-crash-watch.service"
+  # Our notices, including the MIT license of the parts adapted from Omarchy.
+  install -Dm644 "$s/../NOTICE.md" "$pkgdir/usr/share/licenses/$pkgname/NOTICE.md"
   # Agent skills (linked into each agent's skills folder by lgtm-agent / lgtm-session).
   install -d "$pkgdir/usr/share/lgtm/agents"
   cp -r "$s/agents/skills" "$pkgdir/usr/share/lgtm/agents/skills"

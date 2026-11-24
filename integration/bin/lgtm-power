@@ -9,17 +9,19 @@ choice=$(printf '%s\n' \
   "Choose AI agent" \
   "Theme…" \
   "Set up: gaming, Windows VM, dev…" \
+  "Advanced features and RAM…" \
   "Keyboard style: switch to $([[ $(lgtm-keys) == mac ]] && echo Windows || echo macOS)" \
   "Stop Android (free memory)" \
   "Switch to ${other^} mode (next login)" \
   "About & open source licenses" \
   "Log out" "Restart" "Shut down" \
-  | fuzzel --dmenu --prompt "LGTM OS  " --lines 10) || exit 0
+  | fuzzel --dmenu --prompt "LGTM OS  " --lines 11) || exit 0
 
 case $choice in
   "Choose AI agent") lgtm-agent --pick ;;
   Theme*) lgtm-theme --pick ;;
   Set\ up*) lgtm-setup --pick ;;
+  Advanced*) lgtm-feature --pick ;;
   Keyboard\ style*) new=$([[ $(lgtm-keys) == mac ]] && echo windows || echo mac)
                    foot --title="Keyboard style" -e sh -c "sudo lgtm-keys $new && lgtm-session --apply; echo 'New shortcuts work in new windows now; log out and in to apply them everywhere.'; read -rp 'Press Enter to close' _" ;;
   Stop\ Android*) lgtm-android stop ;;

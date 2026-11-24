@@ -16,7 +16,7 @@ description: >
 # LGTM OS
 
 LGTM OS is a lightweight Arch Linux desktop. Its promise: **the system plus desktop fits
-in 128 MB of RAM**, and nothing heavy runs until the user opens it. Every change you make
+in 128 MB of RAM** (256 MB with chosen advanced features, `lgtm-feature`), and nothing heavy runs until the user opens it. Every change you make
 must keep that promise. If a change adds something that runs all the time, say what it
 costs in RAM and ask first.
 
@@ -166,10 +166,12 @@ prints usage with `--help` or no arguments.
 | Command | Purpose |
 |---|---|
 | `lgtm-session` | Starts the desktop (picks the mode) |
-| `lgtm-mem` | RAM used by the system + biggest processes. Target ≤ 128 MB at idle |
+| `lgtm-mem` | RAM used by the system + biggest processes. Target ≤ 128 MB at idle (256 with advanced features) |
 | `lgtm-power` | Logo menu: agent, theme, setup, keyboard style, mode, power |
 | `lgtm-open FILE` | Install/run any app package (see the `lgtm-apps` skill) |
 | `lgtm-agent` | Launch the default AI agent (`--pick` to choose, `--prompt TEXT`) |
+| `lgtm-feature [enable\|disable NAME]` | Advanced features and their RAM (flags in `/etc/lgtm/features/`) |
+| `lgtm-crash [list\|report\|ask\|mute\|unmute\|on\|off]` | Crash reports and notifications |
 | `lgtm-keys` | Show or set the keyboard style (mac / windows) |
 | `lgtm-screenshot full\|region` | Screenshot to ~/Pictures/Screenshots + clipboard |
 | `lgtm-lock` | Lock the screen |

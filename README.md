@@ -1,11 +1,14 @@
 # LGTM OS
 
 A lightweight Arch-based desktop that runs Windows, Linux, Android and (in preview) Mac apps.
-The system and desktop fit in **128 MB of RAM**. Apps use more while they run, and nothing
-heavy runs until you use it.
+The system and desktop target **128 MB of RAM** (up to 256 MB with advanced features you
+choose). Apps use more while they run, and nothing heavy runs until you use it.
+
+Inspired by [Omarchy](https://omarchy.org): see [Credits](#credits).
 
 ## Goals
-1. **Fast and light.** The base system plus desktop must stay at or under 128 MB.
+1. **Fast and light.** The base system plus desktop must stay at or under 128 MB. Advanced
+   features are off until chosen, and everything chosen must fit in 256 MB.
 2. **Just works.** Double-click a `.exe`, `.msi` or `.apk` and it installs and shows up in the menu.
 3. **Fully open source.** Everything comes from official Arch repos, apart from two
    prebuilt AUR packages (Teams, Darling) and our own glue.
@@ -62,6 +65,25 @@ The underlying tools (virsh, virt-manager, distrobox, podman) still work on ever
 Profiles and themes are plain folders (`/usr/share/lgtm/profiles`, `/usr/share/lgtm/themes`)
 with a `packages` list; AUR entries are built on the machine when needed.
 
+## Advanced features and the RAM calculator
+The installer shows a running RAM total as you add or remove setup profiles and features.
+Later: logo menu → **Advanced features and RAM…**, or `lgtm-feature`. `lgtm-mem` shows what
+is really used.
+
+| Choice | Idle RAM |
+|---|---|
+| LGTM OS and the desktop | 128 MB (budget) |
+| Automatic crash reports | +4 MB |
+| Gaming, Developer & AI agents | +0 MB (nothing runs until used) |
+| Virtual machines | +64 MB (Looking Glass frame buffer, 32-128 MB depending on the monitor) |
+
+**Crashes:** when a program crashes, click the notification to ask your AI agent why or read
+the report. This costs no RAM while idle. With *Automatic crash reports* on, a small watcher
+also writes a report for every crash (`lgtm-crash list`). Reports stay on your computer in
+`~/.local/state/lgtm/crash`. Automatic ones download nothing; asking the AI fetches debug
+symbols from Arch, which tells Arch's server which program builds were involved, and gives your
+AI agent the report. Mute one program with `lgtm-crash mute NAME`, or all with `lgtm-crash off`.
+
 ## Running apps
 Double-click any app package and `lgtm-open` handles it:
 
@@ -113,6 +135,14 @@ every listed package still exists. CI runs both.
 - `build.sh`: archiso build (based on archiso's `releng` boot setup)
 - `tools/vm.sh`: QEMU test runner
 - `tools/check.sh`: fast checks, also run by CI
+- `tools/test-crash.sh`: crashes a program on purpose and checks `lgtm-crash` end to end
+
+## Credits
+LGTM OS is heavily inspired by [Omarchy](https://github.com/omacom/omarchy) by David Heinemeier
+Hansson and its contributors: an opinionated Arch desktop, one password from boot to desktop,
+AI agents that know the system, and crash notifications that offer a diagnosis. The
+`diagnose-crash` skill is adapted from Omarchy's (MIT, see [NOTICE.md](NOTICE.md)). LGTM OS is
+an independent project, not affiliated with or endorsed by Omarchy.
 
 ## Licenses
 LGTM OS's own code is GPL-3.0-or-later ([LICENSE](LICENSE)). Bundled components keep their

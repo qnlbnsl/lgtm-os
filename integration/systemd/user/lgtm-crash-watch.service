@@ -1,0 +1,11 @@
+[Unit]
+Description=Watch for program crashes and write a report for each
+ConditionPathExists=/etc/lgtm/features/crash-reports
+
+[Service]
+ExecStart=/usr/bin/lgtm-crash-watch
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -22,6 +22,9 @@ It is regenerated automatically after every package install or update.
 
 - **LGTM OS's own code** (package `lgtm-integration`) is licensed GPL-3.0-or-later.
   Source: https://github.com/qnlbnsl/lgtm-os
+- **Omarchy:** LGTM OS is heavily inspired by Omarchy by David Heinemeier Hansson and
+  contributors (https://github.com/omacom/omarchy). Adapted parts are MIT-licensed; the license
+  text is in `/usr/share/licenses/lgtm-integration/NOTICE.md`.
 - **License texts:** each package's own files are in `/usr/share/licenses/<package>/`.
   Common licenses (GPL, LGPL, MIT, Apache, BSD, MPL, ...) are in `/usr/share/licenses/spdx/`.
 - **Source code:** the build recipe for each Arch package is at

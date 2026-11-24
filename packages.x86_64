@@ -86,6 +86,8 @@ flatpak
 file
 # --- Android ---
 waydroid
+# --- crash reports (lgtm-crash) ---
+gdb
 # --- memory ---
 earlyoom
 zram-generator

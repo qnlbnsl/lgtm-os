@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+# lgtm-feature: advanced features, and the RAM calculator.
+#
+#   lgtm-feature                 list features (✓ = on) and the RAM they use
+#   lgtm-feature enable NAME     turn one on (disable NAME: off)
+#   lgtm-feature --pick          choose from a menu
+#   lgtm-feature --choose FILE   (installer) choose features and setup profiles while the
+#                                RAM total updates; writes the choices to FILE
+#   lgtm-feature --limit         the RAM target for this system's choices, in MB
+#
+# The base system stays within 128 MB. Anything that uses RAM all the time is off until
+# chosen, and everything chosen must fit in 256 MB (Advanced). RAM= in feature.conf and
+# profile.conf is what it adds while idle; apps use more while they run.
+set -euo pipefail
+shopt -s nullglob
+
+SHARE=${LGTM_SHARE:-/usr/share/lgtm}
+ETC=${LGTM_ETC:-/etc/lgtm}
+DONE=${LGTM_DONE:-/var/lib/lgtm/profiles}
+BASE=128 STANDARD=128 ADVANCED=256
+
+die() { echo "lgtm-feature: $*" >&2; exit 1; }
+conf() { [[ $1 == features ]] && echo "$SHARE/features/$2/feature.conf" || echo "$SHARE/profiles/$2/profile.conf"; }
+# get features|profiles NAME VARIABLE
+# shellcheck disable=SC2034  # read through ${!3}
+get() { (LABEL='' DESCRIPTION='' RAM=0 UNITS_ON='' UNITS_OFF=''; . "$(conf "$1" "$2")"; echo "${!3}"); }
+names() { local d; for d in "$SHARE/$1"/*/*.conf; do d=${d%/*}; echo "${d##*/}"; done; }
+on() { if [[ $1 == features ]]; then [[ -e $ETC/features/$2 ]]; else [[ -e $DONE/$2 ]]; fi; }
+limit() { (( $1 > STANDARD )) && echo $ADVANCED || echo $STANDARD; }
+
+total() {  # RAM of what's on now
+  local k n t=$BASE
+  for k in features profiles; do for n in $(names $k); do
+    if on $k "$n"; then t=$((t + $(get $k "$n" RAM))); fi
+  done; done
+  echo "$t"
+}
+
+in_terminal() {
+  [[ -t 0 ]] && return 0
+  exec foot --app-id=lgtm.feature --title="LGTM OS features" -e bash -c \
+    "$(printf '%q ' "$0" "$@"); echo; read -rp 'Press Enter to close' _"
+}
+
+switch() {  # switch enable|disable NAME
+  local n=$2 t u
+  [[ $n =~ ^[a-z0-9-]+$ && -r $(conf features "$n") ]] || die "no feature '$n' (see: lgtm-feature)"
+  [[ $EUID -ne 0 ]] || die "run as your user (it asks for your password when needed)"
+  if [[ $1 == enable ]]; then
+    if on features "$n"; then echo "$n is already on."; return; fi
+    t=$(( $(total) + $(get features "$n" RAM) ))
+    (( t <= ADVANCED )) || die "that would need about $t MB; the limit is $ADVANCED MB. Turn something else off first."
+    sudo install -d "$ETC/features"; sudo touch "$ETC/features/$n"
+    for u in $(get features "$n" UNITS_OFF); do systemctl --user stop "$u"; done
+    for u in $(get features "$n" UNITS_ON); do systemctl --user start "$u"; done
+  else
+    sudo rm -f "$ETC/features/$n"
+    for u in $(get features "$n" UNITS_ON); do systemctl --user stop "$u"; done
+    for u in $(get features "$n" UNITS_OFF); do systemctl --user start "$u"; done
+  fi
+  echo "$(get features "$n" LABEL): $([[ $1 == enable ]] && echo on || echo off). Idle RAM target: about $(total) MB."
+}
+
+choose() {  # the installer's calculator
+  local kinds=() items=() picked=() i k n t r have reply note
+  for k in features profiles; do for n in $(names $k); do kinds+=("$k"); items+=("$n"); picked+=(0); done; done
+  have=$(awk '/^MemTotal:/ {print int($2/1024)}' /proc/meminfo)
+  while :; do
+    t=$BASE
+    echo
+    echo "  What will you use this computer for? Choose any, or none. Profiles are set up on"
+    echo "  first login (needs the internet). You can change all of this later."
+    echo
+    printf '        %-32s %4d MB\n' "LGTM OS and the desktop" $BASE
+    for i in "${!items[@]}"; do
+      k=${kinds[$i]} n=${items[$i]} r=$(get "${kinds[$i]}" "${items[$i]}" RAM)
+      printf '   %d) %s %-30s %+5d MB\n        %s\n' $((i+1)) "$( (( picked[i] )) && echo '[x]' || echo '[ ]')" \
+        "$(get "$k" "$n" LABEL)" "$r" "$(get "$k" "$n" DESCRIPTION)"
+      (( picked[i] )) && t=$((t+r))
+    done
+    note=$( (( t > STANDARD )) && echo Advanced || echo Standard)
+    printf '\n   Idle RAM: about %d MB of %d MB (%s). This computer has %d MB.\n' "$t" "$(limit "$t")" "$note" "$have"
+    (( t <= ADVANCED )) || echo "   Over the limit: remove something to continue."
+    read -rp "Number to add or remove, Enter to continue: " reply || die "cancelled"
+    if [[ -z $reply ]]; then
+      if (( t <= ADVANCED )); then break; fi
+      continue
+    fi
+    for r in $reply; do
+      if [[ $r =~ ^[1-9][0-9]?$ ]] && (( r <= ${#items[@]} )); then picked[r-1]=$((1 - picked[r-1]))
+      else echo "   Not a choice: $r"; fi
+    done
+  done
+  : > "$1"
+  for i in "${!items[@]}"; do
+    if (( picked[i] )); then echo "${kinds[$i]} ${items[$i]}" >> "$1"; fi
+  done
+}
+
+case ${1:-} in
+  "")
+    for k in features profiles; do for n in $(names $k); do
+      printf '%s %-14s %+4d MB  %s\n' "$(on $k "$n" && echo ✓ || echo ' ')" "$n" "$(get $k "$n" RAM)" "$(get $k "$n" LABEL)"
+    done; done
+    echo "Idle RAM target: about $(total) MB (limit $(limit "$(total)") MB). Measured: lgtm-mem" ;;
+  enable|disable) [[ $# -eq 2 ]] || die "usage: lgtm-feature $1 NAME"; in_terminal "$@"; switch "$1" "$2" ;;
+  --pick)
+    lines=(); for n in $(names features); do
+      lines+=("$(get features "$n" LABEL) (+$(get features "$n" RAM) MB)$(on features "$n" && echo '  ✓')"); done
+    choice=$(printf '%s\n' "${lines[@]}" | fuzzel --dmenu --prompt "Features  " --lines ${#lines[@]}) || exit 0
+    for n in $(names features); do
+      if [[ $choice == "$(get features "$n" LABEL) (+"* ]]; then
+        action=enable; if on features "$n"; then action=disable; fi
+        in_terminal "$action" "$n"; switch "$action" "$n"
+      fi
+    done ;;
+  --choose) [[ $# -eq 2 ]] || die "usage: lgtm-feature --choose FILE"; choose "$2" ;;
+  --limit) limit "$(total)" ;;
+  -h|--help) sed -n '2,14p' "$0" ;;
+  *) die "unknown option: $1 (see: lgtm-feature --help)" ;;
+esac

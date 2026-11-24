@@ -1,0 +1,7 @@
+#!/bin/bash
+# lgtm-crash-watch: follow the journal for crashes (crash-reports feature, lgtm-feature).
+# Deliberately tiny: it only waits. lgtm-crash does the work and exits.
+set -uo pipefail
+lgtm-crash scan   # anything that crashed while we weren't running
+journalctl -q -f -n 0 -o cat --output-fields=MESSAGE_ID MESSAGE_ID=fc2e22bc6ee647b6b90729ab34a250b1 |
+  while read -r _; do lgtm-crash scan; done

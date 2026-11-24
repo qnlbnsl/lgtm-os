@@ -6,8 +6,10 @@ newest file in `docs/sessions/`.
 
 ## Rules
 - **128 MB budget.** Base system plus desktop must idle at or under 128 MB (check with
-  `lgtm-mem` in a VM). No new always-running process: use socket, D-Bus, path or timer
-  activation. Prefer a script over a daemon.
+  `lgtm-mem` in a VM). No new always-running process in the base: use socket, D-Bus, path or
+  timer activation. Prefer a script over a daemon. Something that must always run is an
+  opt-in feature (`integration/share/lgtm/features/`) with a measured `RAM=`; everything
+  chosen must fit in 256 MB. Profiles also state `RAM=`.
 - **Just works.** A non-technical user must never need the terminal. Errors need a plain
   message (`die` in the scripts, or a notification when there's no terminal).
 - **Open source.** Official Arch repos first. AUR packages built into the ISO must be
@@ -29,6 +31,7 @@ newest file in `docs/sessions/`.
 ## Commands
 - `tools/check.sh`: run before every commit (no root needed). CI runs it too.
 - `tools/check.sh packages`: run after changing any package list.
+- `tools/test-crash.sh`: run after changing `lgtm-crash` (needs a desktop session).
 - `./build.sh`: full ISO. Needs archiso; asks for sudo; runs AUR PKGBUILDs on this
   machine, so read them first (`cache/aur/`).
 - `tools/vm.sh live|install|disk [MB]`: boot it in QEMU (`UEFI=1` for OVMF).

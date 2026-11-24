@@ -8,6 +8,36 @@ LGTM OS's own code (everything in this repository: `integration/`, `packages/`,
 `overlay/`, `build.sh`, `tools/`) is free software under the GNU General Public License,
 version 3 or (at your option) any later version. See [LICENSE](LICENSE).
 
+## Omarchy
+
+LGTM OS is heavily inspired by Omarchy (https://github.com/omacom/omarchy). The
+`diagnose-crash` agent skill (`integration/agents/skills/diagnose-crash/`) is adapted from
+Omarchy's, and `lgtm-crash`, `lgtm-agent` and the agent skills follow its design. Material
+adapted from Omarchy is used under the MIT License:
+
+```
+Copyright (c) David Heinemeier Hansson
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```
+
 ## Third-party software
 
 An LGTM OS image is built from Arch Linux packages plus a few others. Each keeps its own
@@ -65,6 +95,6 @@ own licenses (listed per file in `/usr/share/licenses/linux-firmware/`).
 
 Windows, Microsoft Teams and Microsoft are trademarks of Microsoft Corporation. macOS is a
 trademark of Apple Inc. Android is a trademark of Google LLC. Arch Linux is a trademark of
-its respective owners. LGTM OS is an independent project, not affiliated with or endorsed
+its respective owners. Omarchy is a name of its respective owner. LGTM OS is an independent project, not affiliated with or endorsed
 by any of them. It runs apps built for those platforms through open source compatibility
 layers.
