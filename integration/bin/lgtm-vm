@@ -947,7 +947,6 @@ def delete(name):
         die(f"no VM named {name}")
     if not yes(f"Delete {name}? Its disk is kept unless you say so next", "n"):
         return
-    m = meta(name)
     if state(name) == "running":
         virsh("destroy", name, check=False)
     virsh("undefine", name, "--nvram", "--tpm", check=False) or virsh("undefine", name, "--nvram", check=False)

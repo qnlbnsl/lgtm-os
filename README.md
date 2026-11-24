@@ -99,6 +99,9 @@ tools/vm.sh live 2048     # try the live ISO
 tools/vm.sh install 2048  # install to a VM disk (lgtm-install)
 tools/vm.sh disk 128      # boot the installed system with 128 MB; run lgtm-mem
 ```
+`tools/check.sh` runs the fast checks (no root, no build); `tools/check.sh packages` checks that
+every listed package still exists. CI runs both.
+
 `build.sh` builds the AUR packages listed in `aur.txt`. Read their PKGBUILDs (in
 `cache/aur/`) before building.
 
@@ -109,6 +112,7 @@ tools/vm.sh disk 128      # boot the installed system with 128 MB; run lgtm-mem
 - `packages.x86_64`: what goes on the ISO
 - `build.sh`: archiso build (based on archiso's `releng` boot setup)
 - `tools/vm.sh`: QEMU test runner
+- `tools/check.sh`: fast checks, also run by CI
 
 ## Licenses
 LGTM OS's own code is GPL-3.0-or-later ([LICENSE](LICENSE)). Bundled components keep their

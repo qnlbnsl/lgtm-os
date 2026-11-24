@@ -1,0 +1,26 @@
+name: check
+on:
+  push:
+    branches: [master]
+  pull_request:
+  schedule:
+    - cron: "0 6 * * 1" # packages get renamed or dropped upstream
+permissions:
+  contents: read
+jobs:
+  scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y shellcheck libxml2-utils desktop-file-utils pipx
+      - run: pipx install ruff
+      - run: tools/check.sh
+  packages:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - run: |
+          printf '[multilib]\nInclude = /etc/pacman.d/mirrorlist\n' >> /etc/pacman.conf
+          pacman -Syu --noconfirm git curl
+      - uses: actions/checkout@v4
+      - run: tools/check.sh packages

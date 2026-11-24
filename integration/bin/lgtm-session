@@ -199,7 +199,10 @@ if [[ -s /etc/lgtm/vm-gpus ]]; then
     a=${c#/dev/dri/by-path/pci-}; a=${a%-card}
     [[ " ${reserved[*]} " == *" $a "* ]] || keep+=("$(readlink -f "$c")")
   done
-  (( ${#keep[@]} )) && export WLR_DRM_DEVICES=$(IFS=:; echo "${keep[*]}")
+  if (( ${#keep[@]} )); then
+    WLR_DRM_DEVICES=$(IFS=:; echo "${keep[*]}")
+    export WLR_DRM_DEVICES
+  fi
 fi
 
 if [[ $MODE == glass ]]; then
